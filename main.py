@@ -64,39 +64,35 @@ SECTOR_ETFS = {
 }
 
 
-def fetch_a_share_sina() -> dict:
-    """通过新浪接口获取A股指数数据（稳定、免费、无需akshare）"""
+def fetch_a_share_eastmoney() -> dict:
+    """通过东方财富API获取A股指数数据（稳定、免费）"""
     results = {}
-    codes_str = ",".join([f"sh{v}" if v.startswith("0") else f"sz{v}" for v in A_SHARE_INDICES.values()])
-    url = f"https://hq.sinajs.cn/list={codes_str}"
+    import urllib.request
 
-    try:
-        import urllib.request
-        req = urllib.request.Request(url, headers={"Referer": "https://finance.sina.com.cn"})
-        resp = urllib.request.urlopen(req, timeout=15)
-        text = resp.read().decode("gbk")
+    for name, code in A_SHARE_INDICES.items():
+        # 判断市场：0开头=上海(1), 3开头=深圳(0)
+        market = "1" if code.startswith("0") else "0"
+        secid = f"{market}.{code}"
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
 
-        name_to_code = {v: k for k, v in A_SHARE_INDICES.items()}
-        for line in text.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split('"')
-            if len(parts) < 2:
-                continue
-            data = parts[1].split(",")
-            if len(data) < 4:
-                continue
-            name = data[0]
-            if name in name_to_code:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            d = data.get("data")
+            if d and d.get("f57"):
                 results[name] = {
                     "name": name,
-                    "price": float(data[1]) if data[1] else 0,
-                    "change": float(data[2]) if data[2] else 0,
-                    "change_pct": float(data[3]) if data[3] else 0,
-                    "volume": data[4] if len(data) > 4 else "",
+                    "price": float(d.get("f43", 0)),
+                    "change": float(d.get("f169", 0)),
+                    "change_pct": float(d.get("f170", 0)),
+                    "volume": str(d.get("f47", "")),
+                    "high": float(d.get("f44", 0)),
+                    "low": float(d.get("f45", 0)),
                 }
-    except Exception as e:
-        print(f"[A股] 新浪接口获取失败: {e}")
+                print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+        except Exception as e:
+            print(f"  ✗ {name}获取失败: {e}")
 
     return results
 
@@ -193,7 +189,7 @@ def rule_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) 
 
         # 行业影响推断
         lines.append("")
-        lines.append("【💡 影响推断】")
+        lines.append("【💡 行业影响推断】")
         for name, d in top3:
             if d["change_pct"] > 1:
                 if name == "科技":
@@ -214,6 +210,61 @@ def rule_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) 
                     lines.append(f"  • 科技板块走弱 → A股科技板块可能承压，注意回避高估值标的")
                 elif name == "能源":
                     lines.append(f"  • 能源板块走弱 → 可能拖累资源类板块，对新能源或是利好（替代效应）")
+
+    # A股综合预判
+    lines.append("")
+    lines.append("【🎯 A股今日预判】")
+    
+    # 收集所有影响因子
+    bullish_factors = []
+    bearish_factors = []
+    
+    # 美股影响
+    if us_data:
+        us_avg = sum(d["change_pct"] for d in us_data.values()) / len(us_data)
+        if us_avg > 0.5:
+            bullish_factors.append(f"美股隔夜走强（均涨幅{us_avg:+.2f}%），情绪面利好")
+        elif us_avg < -0.5:
+            bearish_factors.append(f"美股隔夜走弱（均跌幅{us_avg:+.2f}%），情绪面承压")
+    
+    # 日韩影响
+    if asia_data:
+        jp = asia_data.get("日经225", {})
+        kr = asia_data.get("韩国KOSPI", {})
+        if jp.get("change_pct", 0) > 0.5:
+            bullish_factors.append("日经225走强，亚太市场氛围偏暖")
+        elif jp.get("change_pct", 0) < -0.5:
+            bearish_factors.append("日经225走弱，亚太市场氛围偏冷")
+    
+    # 板块影响
+    if sectors:
+        sorted_sec = sorted(sectors.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        top_name = sorted_sec[0][0] if sorted_sec else ""
+        top_pct = sorted_sec[0][1]["change_pct"] if sorted_sec else 0
+        if top_pct > 1.5:
+            bullish_factors.append(f"{top_name}板块领涨全球（{top_pct:+.2f}%），相关A股板块或跟涨")
+        bottom_name = sorted_sec[-1][0] if sorted_sec else ""
+        bottom_pct = sorted_sec[-1][1]["change_pct"] if sorted_sec else 0
+        if bottom_pct < -1.5:
+            bearish_factors.append(f"{bottom_name}板块领跌全球（{bottom_pct:+.2f}%），相关A股板块注意风险")
+    
+    if bullish_factors:
+        lines.append("  偏多因素：")
+        for f in bullish_factors:
+            lines.append(f"    ✅ {f}")
+    if bearish_factors:
+        lines.append("  偏空因素：")
+        for f in bearish_factors:
+            lines.append(f"    ⚠️ {f}")
+    
+    if not bullish_factors and not bearish_factors:
+        lines.append("  今日外部因素中性，A股走势更多取决于国内消息面和资金面。")
+    elif len(bullish_factors) > len(bearish_factors):
+        lines.append(f"  📈 综合判断：偏多因素占优（{len(bullish_factors)} vs {len(bearish_factors)}），A股今日有望偏强运行。")
+    elif len(bearish_factors) > len(bullish_factors):
+        lines.append(f"  📉 综合判断：偏空因素占优（{len(bearish_factors)} vs {len(bullish_factors)}），A股今日可能承压。")
+    else:
+        lines.append(f"  📊 综合判断：多空因素均衡，A股今日大概率维持震荡格局。")
 
     return "\n".join(lines)
 
@@ -395,7 +446,7 @@ def main():
 
     # 1. 抓取A股数据
     print("[数据] 获取A股数据...")
-    a_share = fetch_a_share_sina()
+    a_share = fetch_a_share_eastmoney()
     print(f"  → 获取到 {len(a_share)} 个指数")
 
     # 2. 抓取美股数据
