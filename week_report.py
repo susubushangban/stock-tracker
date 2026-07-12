@@ -54,6 +54,46 @@ A_SECTORS_WEEKLY = {
     "创新药":   "90.BK0444",
 }
 
+# A股板块对应的行业ETF（yfinance可获取历史数据）
+SECTOR_ETFS_WEEKLY = {
+    "半导体":   "512480.SS",
+    "芯片":     "159995.SZ",
+    "人工智能": "515070.SS",
+    "军工航天": "512660.SS",
+    "机器人":   "562500.SS",
+    "新能源":   "516160.SS",
+    "消费电子": "159732.SZ",
+    "创新药":   "159992.SZ",
+}
+
+
+def fetch_sector_weekly_data() -> dict:
+    """通过yfinance获取A股行业ETF本周累计涨跌"""
+    results = {}
+    for name, code in SECTOR_ETFS_WEEKLY.items():
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="5d")
+            if len(hist) < 2:
+                continue
+
+            first_close = hist.iloc[0]["Close"]
+            last_close = hist.iloc[-1]["Close"]
+            week_change = last_close - first_close
+            week_change_pct = (week_change / first_close) * 100
+
+            results[name] = {
+                "name": name,
+                "start": round(float(first_close), 2),
+                "end": round(float(last_close), 2),
+                "change_pct": round(float(week_change_pct), 2),
+            }
+            print(f"  ✓ 板块ETF {name}: 周{results[name]['change_pct']:+.2f}%")
+        except Exception as e:
+            print(f"  ✗ 板块ETF {name}: {e}")
+
+    return results
+
 
 def fetch_weekly_data(symbols: dict) -> dict:
     """获取本周累计涨跌幅（使用5日数据）"""
@@ -207,7 +247,8 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
 
 
 def generate_html_weekly(date_str: str, week_range: str, a_share: dict, us_data: dict,
-                          asia_data: dict, a_sectors: dict, analysis: str) -> str:
+                          asia_data: dict, a_sectors: dict, analysis: str,
+                          sector_weekly: dict = None) -> str:
     """生成周报HTML邮件"""
     all_pct = []
     for d in list(a_share.values()) + list(us_data.values()):
@@ -240,6 +281,17 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 .footer {{ text-align:center; color:#bbb; font-size:11px; margin-top:16px; }}
 .week-range {{ background:#f0f7ff; padding:8px 12px; border-radius:8px; font-size:13px;
                text-align:center; color:#2c3e50; margin-bottom:4px; }}
+.bar-table {{ width:100%; border-collapse:collapse; margin:6px 0; }}
+.bar-table td {{ padding:5px 6px; font-size:13px; border-bottom:1px solid #f5f5f5; }}
+.bar-table .sector-name {{ font-weight:500; white-space:nowrap; width:65px; }}
+.bar-cell {{ width:100%; }}
+.bar-track {{ height:14px; background:#f0f0f0; border-radius:7px; position:relative; overflow:hidden; min-width:60px; }}
+.bar-fill {{ height:100%; border-radius:7px; position:absolute; }}
+.bar-fill.up {{ background:linear-gradient(90deg,#ff6b6b,#e74c3c); }}
+.bar-fill.down {{ background:linear-gradient(90deg,#27ae60,#2ecc71); }}
+.bar-pct {{ font-weight:bold; font-size:12px; padding-left:8px; white-space:nowrap; text-align:right; width:55px; }}
+.bar-summary {{ display:flex; justify-content:space-around; padding:8px 0; font-size:12px; color:#888; }}
+.bar-summary b {{ font-size:15px; }}
 </style>
 </head>
 <body>
@@ -262,8 +314,47 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 </div>"""
         html += "</div>"
 
-    # A股板块快照
-    if a_sectors:
+    # A股板块快照（东方财富当日数据+ETF周涨跌）
+    if sector_weekly and len(sector_weekly) > 0:
+        # 计算条形图最大绝对值用于比例
+        max_abs = max(abs(d["change_pct"]) for d in sector_weekly.values())
+        max_abs = max(max_abs, 0.5)  # 至少0.5%避免除零
+
+        sorted_sec = sorted(sector_weekly.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        up_count = sum(1 for _, d in sorted_sec if d["change_pct"] > 0)
+        down_count = sum(1 for _, d in sorted_sec if d["change_pct"] < 0)
+        total = len(sorted_sec)
+
+        html += '<div class="card"><div class="section-title">🔥 A股板块·本周涨跌</div>'
+
+        # 汇总条
+        html += f'<div class="bar-summary"><span>📈 上涨 <b class="red">{up_count}</b> 个</span><span>📉 下跌 <b class="green">{down_count}</b> 个</span><span>共 {total} 板块</span></div>'
+
+        html += '<table class="bar-table">'
+        for name, d in sorted_sec:
+            pct = d["change_pct"]
+            is_up = pct > 0
+            cls = "red" if is_up else "green"
+            emoji = "🔥" if pct > 3 else ("📈" if pct > 0 else ("📉" if pct < -3 else "⚪"))
+
+            # 条形图宽度（百分比形式）
+            bar_width = min(abs(pct) / max_abs * 100, 100)
+            if is_up:
+                bar_style = f"left:50%;width:{bar_width / 2}%;"
+                bar_class = "up"
+            else:
+                bar_style = f"left:{50 - bar_width / 2}%;width:{bar_width / 2}%;"
+                bar_class = "down"
+
+            html += f"""<tr>
+<td class="sector-name">{emoji} {name}</td>
+<td class="bar-cell"><div class="bar-track"><div class="bar-fill {bar_class}" style="{bar_style}"></div></div></td>
+<td class="bar-pct {cls}">{pct:+.2f}%</td>
+</tr>"""
+        html += "</table></div>"
+
+    elif a_sectors:
+        # 回退：东方财富快照
         html += '<div class="card"><div class="section-title">🔥 A股热门板块</div>'
         sorted_sec = sorted(a_sectors.items(), key=lambda x: x[1]["change_pct"], reverse=True)
         for name, d in sorted_sec:
@@ -357,12 +448,17 @@ def main():
     a_sectors = fetch_a_sectors_snapshot()
     print(f"  → 获取到 {len(a_sectors)} 个板块")
 
+    # 4.5 A股板块ETF周涨跌
+    print("[数据] 获取A股板块ETF周涨跌...")
+    sector_weekly = fetch_sector_weekly_data()
+    print(f"  → 获取到 {len(sector_weekly)} 个板块周数据")
+
     # 5. 生成分析
     print("[分析] 生成周报...")
     analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range)
 
     # 6. HTML邮件
-    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis)
+    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis, sector_weekly)
 
     # 7. 发送
     print("[邮件] 发送中...")
