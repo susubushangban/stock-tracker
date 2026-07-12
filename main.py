@@ -76,6 +76,121 @@ A_SHARE_SECTORS = {
 }
 
 
+def fetch_top_movers(top_n: int = 8) -> tuple:
+    """获取A股涨幅榜和跌幅榜前N个股（东方财富实时行情排行）"""
+    import urllib.request
+
+    top_gainers = []
+    top_losers = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 涨幅榜（按涨跌幅降序）
+    url_gainers = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n + 5}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:0+t:6,m:0+t:80"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_gainers, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            name = item.get("f14", "")
+            if "ST" in name or "*ST" in name or name.startswith("N"):
+                continue
+            top_gainers.append({
+                "name": name,
+                "code": item.get("f12", ""),
+                "price": float(item.get("f2", 0)),
+                "change_pct": float(item.get("f3", 0)),
+            })
+            if len(top_gainers) >= top_n:
+                break
+        print(f"  ✓ 涨幅榜: 获取到 {len(top_gainers)} 只")
+    except Exception as e:
+        print(f"  ✗ 涨幅榜获取失败: {e}")
+
+    # 跌幅榜（按涨跌幅升序）
+    url_losers = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n + 5}&po=0&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:0+t:6,m:0+t:80"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_losers, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            name = item.get("f14", "")
+            if "ST" in name or "*ST" in name or name.startswith("N"):
+                continue
+            top_losers.append({
+                "name": name,
+                "code": item.get("f12", ""),
+                "price": float(item.get("f2", 0)),
+                "change_pct": float(item.get("f3", 0)),
+            })
+            if len(top_losers) >= top_n:
+                break
+        print(f"  ✓ 跌幅榜: 获取到 {len(top_losers)} 只")
+    except Exception as e:
+        print(f"  ✗ 跌幅榜获取失败: {e}")
+
+    return top_gainers, top_losers
+
+
+def fetch_concept_sector_ranking(top_n: int = 6) -> dict:
+    """获取A股概念板块涨幅榜和跌幅榜（东方财富API）"""
+    import urllib.request
+
+    results = {"top": [], "bottom": []}
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 概念板块涨幅榜
+    url_top = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:3"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_top, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            results["top"].append({
+                "name": item.get("f14", ""),
+                "change_pct": float(item.get("f3", 0)),
+            })
+        print(f"  ✓ 概念板块涨幅榜: {len(results['top'])} 个")
+    except Exception as e:
+        print(f"  ✗ 概念板块涨幅榜获取失败: {e}")
+
+    # 概念板块跌幅榜
+    url_bottom = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=0&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:3"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_bottom, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            results["bottom"].append({
+                "name": item.get("f14", ""),
+                "change_pct": float(item.get("f3", 0)),
+            })
+        print(f"  ✓ 概念板块跌幅榜: {len(results['bottom'])} 个")
+    except Exception as e:
+        print(f"  ✗ 概念板块跌幅榜获取失败: {e}")
+
+    return results
+
+
 def fetch_a_share_sectors() -> dict:
     """通过东方财富API获取A股热门板块涨跌数据"""
     results = {}
@@ -358,7 +473,9 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
 
 
 def generate_html_report(date_str: str, a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict,
-                          sectors: dict, rule_text: str, ai_text: Optional[str]) -> str:
+                          sectors: dict, rule_text: str, ai_text: Optional[str],
+                          top_movers: list = None, top_losers: list = None,
+                          concept_rank: dict = None) -> str:
     """生成HTML格式的邮件报告"""
     # 判断整体涨跌
     all_pct = []
@@ -424,6 +541,41 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
   <span class="idx-name">{name}</span>
   <span class="idx-price"><span class="{cls}">{d['change_pct']:+.2f}%</span></span>
 </div>"""
+        html += "</div>"
+
+    # A股异动个股和板块
+    has_movers = (top_movers and len(top_movers) > 0) or (top_losers and len(top_losers) > 0)
+    has_concept = concept_rank and (len(concept_rank.get("top", [])) > 0 or len(concept_rank.get("bottom", [])) > 0)
+    if has_movers or has_concept:
+        html += '<div class="card"><div class="section-title">⚡ A股昨日异动</div>'
+
+        # 涨幅榜个股
+        if top_movers and len(top_movers) > 0:
+            html += '<div style="margin-bottom:10px;"><b style="color:#e74c3c;font-size:13px;">📈 涨幅榜</b></div>'
+            for s in top_movers:
+                html += f"""<div class="idx">
+  <span class="idx-name">{s['name']} <span class="gray">{s['code']}</span></span>
+  <span class="idx-price"><b>{s['price']:.2f}</b> <span class="red">{s['change_pct']:+.2f}%</span></span>
+</div>"""
+
+        # 跌幅榜个股
+        if top_losers and len(top_losers) > 0:
+            html += '<div style="margin:10px 0 8px;"><b style="color:#27ae60;font-size:13px;">📉 跌幅榜</b></div>'
+            for s in top_losers:
+                html += f"""<div class="idx">
+  <span class="idx-name">{s['name']} <span class="gray">{s['code']}</span></span>
+  <span class="idx-price"><b>{s['price']:.2f}</b> <span class="green">{s['change_pct']:+.2f}%</span></span>
+</div>"""
+
+        # 概念板块异动
+        if has_concept:
+            if concept_rank.get("top"):
+                tags = " ".join([f'<span class="tag" style="background:#ffeaea;color:#c0392b;">{s["name"]} {s["change_pct"]:+.1f}%</span>' for s in concept_rank["top"][:4]])
+                html += f'<div style="margin-top:10px;"><b style="font-size:13px;">🔥 领涨概念：</b>{tags}</div>'
+            if concept_rank.get("bottom"):
+                tags = " ".join([f'<span class="tag" style="background:#eafaf1;color:#1e8449;">{s["name"]} {s["change_pct"]:+.1f}%</span>' for s in concept_rank["bottom"][:4]])
+                html += f'<div style="margin-top:6px;"><b style="font-size:13px;">❄️ 领跌概念：</b>{tags}</div>'
+
         html += "</div>"
 
     # 美股
@@ -515,6 +667,16 @@ def main():
     a_share_sectors = fetch_a_share_sectors()
     print(f"  → 获取到 {len(a_share_sectors)} 个板块")
 
+    # 2.5 抓取A股异动个股（涨幅榜+跌幅榜）
+    print("[数据] 获取A股异动个股...")
+    top_movers, top_losers = fetch_top_movers(8)
+    print(f"  → 涨幅榜{len(top_movers)}只，跌幅榜{len(top_losers)}只")
+
+    # 2.6 抓取概念板块排行
+    print("[数据] 获取概念板块排行...")
+    concept_rank = fetch_concept_sector_ranking(6)
+    print(f"  → 领涨{len(concept_rank.get('top', []))}个，领跌{len(concept_rank.get('bottom', []))}个")
+
     # 3. 抓取美股数据
     print("[数据] 获取美股数据...")
     us_data = fetch_yfinance_data(US_INDICES)
@@ -543,7 +705,8 @@ def main():
 
     # 8. 生成HTML邮件
     print("[报告] 生成报告...")
-    html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text)
+    html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text,
+                                top_movers, top_losers, concept_rank)
 
     # 9. 发送邮件
     print("[邮件] 发送中...")
