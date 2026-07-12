@@ -7,7 +7,7 @@ import json
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
@@ -62,6 +62,44 @@ SECTOR_ETFS = {
     "半导体":   "SMH",
     "房地产":   "XLRE",
 }
+
+# A股热门板块（东方财富板块代码，90.xxx格式）
+A_SHARE_SECTORS = {
+    "半导体":      "90.BK1036",
+    "人工智能":    "90.BK0800",
+    "航天航空":    "90.BK0488",
+    "芯片概念":    "90.BK0893",
+    "机器人":      "90.BK0609",
+    "新能源":      "90.BK0493",
+    "消费电子":    "90.BK0447",
+    "创新药":      "90.BK0444",
+}
+
+
+def fetch_a_share_sectors() -> dict:
+    """通过东方财富API获取A股热门板块涨跌数据"""
+    results = {}
+    import urllib.request
+
+    for name, code in A_SHARE_SECTORS.items():
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fields=f43,f57,f58,f169,f170"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            d = data.get("data")
+            if d and d.get("f57"):
+                results[name] = {
+                    "name": name,
+                    "price": float(d.get("f43", 0)),
+                    "change_pct": float(d.get("f170", 0)),
+                    "change": float(d.get("f169", 0)),
+                }
+                print(f"  ✓ 板块 {name}: {results[name]['change_pct']:+.2f}%")
+        except Exception as e:
+            print(f"  ✗ 板块 {name}获取失败: {e}")
+
+    return results
 
 
 def fetch_a_share_eastmoney() -> dict:
@@ -135,14 +173,14 @@ def fetch_sector_data() -> dict:
     return fetch_yfinance_data(SECTOR_ETFS)
 
 
-def rule_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) -> str:
+def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict) -> str:
     """基于规则的数据分析（不依赖外部AI API）"""
     lines = []
     lines.append("【📊 市场概览】\n")
 
     # A股分析
     if a_share:
-        lines.append("▎A股市场：")
+        lines.append("▎A股主要指数：")
         up_count = sum(1 for v in a_share.values() if v["change_pct"] > 0)
         down_count = sum(1 for v in a_share.values() if v["change_pct"] < 0)
         for name, d in a_share.items():
@@ -154,6 +192,15 @@ def rule_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) 
             lines.append("  → 整体偏弱，多数指数下跌")
         else:
             lines.append("  → 涨跌互现，市场分歧")
+        lines.append("")
+
+    # A股板块分析
+    if a_share_sectors:
+        lines.append("▎A股热门板块：")
+        sorted_as = sorted(a_share_sectors.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        for name, d in sorted_as:
+            emoji = "🔥" if d["change_pct"] > 2 else ("📈" if d["change_pct"] > 0 else ("📉" if d["change_pct"] < -2 else "⚪"))
+            lines.append(f"  {emoji} {name}: {d['change_pct']:+.2f}%")
         lines.append("")
 
     # 美股分析
@@ -269,7 +316,7 @@ def rule_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) 
     return "\n".join(lines)
 
 
-def ai_deep_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dict) -> Optional[str]:
+def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict) -> Optional[str]:
     """使用DeepSeek API进行深度AI分析（需要配置DEEPSEEK_API_KEY）"""
     if not DEEPSEEK_API_KEY:
         return None
@@ -280,10 +327,11 @@ def ai_deep_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dic
 
         # 构建数据摘要
         data_summary = json.dumps({
-            "A股": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in a_share.items()},
+            "A股指数": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in a_share.items()},
+            "A股板块": {k: f"{v['change_pct']:+.2f}%" for k, v in a_share_sectors.items()},
             "美股": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in us_data.items()},
             "日韩": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in asia_data.items()},
-            "板块": {k: f"{v['change_pct']:+.2f}%" for k, v in sectors.items()},
+            "美股板块": {k: f"{v['change_pct']:+.2f}%" for k, v in sectors.items()},
         }, ensure_ascii=False, indent=2)
 
         prompt = f"""你是资深股市分析师。以下是今日全球市场数据（JSON格式）：
@@ -292,10 +340,10 @@ def ai_deep_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dic
 
 请用300字以内，简明扼要地：
 1. 总结各市场整体表现
-2. 分析可能对A股相关行业/板块产生的影响
+2. 重点分析A股热门板块动向及可能对相关行业产生的影响
 3. 标注1-2个值得关注的风险点或机会
 
-要求：语言通俗易懂，适合非专业投资者阅读。"""
+要求：语言通俗易懂，适合非专业投资者阅读，重点关注A股相关影响。"""
 
         response = client.chat.completions.create(
             model="deepseek-chat",
@@ -309,7 +357,7 @@ def ai_deep_analysis(a_share: dict, us_data: dict, asia_data: dict, sectors: dic
         return None
 
 
-def generate_html_report(date_str: str, a_share: dict, us_data: dict, asia_data: dict,
+def generate_html_report(date_str: str, a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict,
                           sectors: dict, rule_text: str, ai_text: Optional[str]) -> str:
     """生成HTML格式的邮件报告"""
     # 判断整体涨跌
@@ -357,12 +405,24 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 
     # A股
     if a_share:
-        html += '<div class="card"><div class="section-title">🇨🇳 A股市场</div>'
+        html += '<div class="card"><div class="section-title">🇨🇳 A股主要指数</div>'
         for name, d in a_share.items():
             cls = "red" if d["change_pct"] > 0 else ("green" if d["change_pct"] < 0 else "gray")
             html += f"""<div class="idx">
   <span class="idx-name">{name}</span>
   <span class="idx-price"><b>{d['price']:.2f}</b> <span class="{cls}">{d['change_pct']:+.2f}%</span></span>
+</div>"""
+        html += "</div>"
+
+    # A股热门板块
+    if a_share_sectors:
+        html += '<div class="card"><div class="section-title">🔥 A股热门板块</div>'
+        sorted_as = sorted(a_share_sectors.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        for name, d in sorted_as:
+            cls = "red" if d["change_pct"] > 0 else ("green" if d["change_pct"] < 0 else "gray")
+            html += f"""<div class="idx">
+  <span class="idx-name">{name}</span>
+  <span class="idx-price"><span class="{cls}">{d['change_pct']:+.2f}%</span></span>
 </div>"""
         html += "</div>"
 
@@ -432,9 +492,10 @@ def send_email(html_content: str, subject: str):
 
 
 def main():
-    print(f"[开始] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    BJ_TZ = timezone(timedelta(hours=8))
+    print(f"[开始] {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M:%S')} 北京时间")
 
-    today = datetime.now()
+    today = datetime.now(BJ_TZ)
     date_str = today.strftime("%Y年%m月%d日")
 
     # 如果是周末，使用上周五的数据
@@ -444,42 +505,47 @@ def main():
     elif weekday == 6:  # 周日
         date_str = (today - timedelta(days=2)).strftime("%Y年%m月%d日")
 
-    # 1. 抓取A股数据
-    print("[数据] 获取A股数据...")
+    # 1. 抓取A股指数数据
+    print("[数据] 获取A股指数...")
     a_share = fetch_a_share_eastmoney()
     print(f"  → 获取到 {len(a_share)} 个指数")
 
-    # 2. 抓取美股数据
+    # 2. 抓取A股板块数据
+    print("[数据] 获取A股热门板块...")
+    a_share_sectors = fetch_a_share_sectors()
+    print(f"  → 获取到 {len(a_share_sectors)} 个板块")
+
+    # 3. 抓取美股数据
     print("[数据] 获取美股数据...")
     us_data = fetch_yfinance_data(US_INDICES)
     print(f"  → 获取到 {len(us_data)} 个指数")
 
-    # 3. 抓取日韩数据
+    # 4. 抓取日韩数据
     print("[数据] 获取日韩数据...")
     asia_data = fetch_yfinance_data(ASIA_INDICES)
     print(f"  → 获取到 {len(asia_data)} 个指数")
 
-    # 4. 抓取板块数据
-    print("[数据] 获取板块数据...")
+    # 5. 抓取美股板块数据
+    print("[数据] 获取美股板块...")
     sectors = fetch_sector_data()
     print(f"  → 获取到 {len(sectors)} 个板块")
 
-    # 5. 规则分析
+    # 6. 规则分析
     print("[分析] 执行规则分析...")
-    rule_text = rule_analysis(a_share, us_data, asia_data, sectors)
+    rule_text = rule_analysis(a_share, a_share_sectors, us_data, asia_data, sectors)
 
-    # 6. AI深度分析（如果配置了API Key）
-    ai_text = ai_deep_analysis(a_share, us_data, asia_data, sectors)
+    # 7. AI深度分析（如果配置了API Key）
+    ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors)
     if ai_text:
         print("[AI] DeepSeek分析完成")
     else:
         print("[AI] 未配置API Key，跳过AI分析")
 
-    # 7. 生成HTML邮件
+    # 8. 生成HTML邮件
     print("[报告] 生成报告...")
-    html = generate_html_report(date_str, a_share, us_data, asia_data, sectors, rule_text, ai_text)
+    html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text)
 
-    # 8. 发送邮件
+    # 9. 发送邮件
     print("[邮件] 发送中...")
     subject = f"📊 全球股市日报 - {date_str}"
     send_email(html, subject)
