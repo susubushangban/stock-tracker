@@ -155,8 +155,51 @@ def fetch_a_sectors_snapshot() -> dict:
     return results
 
 
+def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
+                       a_sectors: dict, sector_weekly: dict, week_range: str) -> Optional[str]:
+    """使用DeepSeek API生成下周展望分析"""
+    if not DEEPSEEK_API_KEY:
+        return None
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+
+        # 构建数据摘要
+        data_summary = json.dumps({
+            "本周交易区间": week_range,
+            "A股指数周涨跌": {k: f"{v['start']:.2f}→{v['end']:.2f}({v['change_pct']:+.2f}%)" for k, v in a_share.items()},
+            "美股周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in us_data.items()},
+            "日韩周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in asia_data.items()},
+            "A股板块ETF周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in sector_weekly.items()} if sector_weekly else {},
+            "A股板块当日快照": {k: f"{v['change_pct']:+.2f}%" for k, v in a_sectors.items()},
+        }, ensure_ascii=False, indent=2)
+
+        prompt = f"""你是资深股市分析师。以下是本周全球市场数据（JSON格式）：
+
+{data_summary}
+
+请基于本周各市场表现，用400字以内分析下周A股可能的变动方向：
+1. 结合本周全球市场走势，判断下周A股整体可能偏多还是偏空
+2. 哪些板块下周可能延续强势或转弱，给出具体板块名称
+3. 需要关注的潜在风险点或机会点（如政策面、外围市场、资金流向等）
+
+要求：语言通俗易懂，观点明确，适合非专业投资者阅读。"""
+
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"[AI分析] 下周展望调用失败: {e}")
+        return None
+
+
 def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
-                              a_sectors: dict, week_range: str) -> str:
+                              a_sectors: dict, week_range: str, sector_weekly: dict = None) -> str:
     """生成周报分析文本"""
     lines = []
     lines.append(f"📅 本周交易区间：{week_range}")
@@ -225,23 +268,28 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
             lines.append(f"    ⚠️ {name}: {d['change_pct']:+.2f}%")
         lines.append("")
 
-    # 下周展望
+    # 下周展望（AI生成）
     lines.append("【🔮 下周展望】")
-    if avg_pct > 1.5:
-        lines.append("  本周全球市场表现强劲，A股情绪面偏暖。下周关注：")
-        lines.append("  ① 强势板块能否延续（如半导体、AI等）")
-        lines.append("  ② 外资流入/流出情况")
-        lines.append("  ③ 周末政策消息面变化")
-    elif avg_pct < -1.5:
-        lines.append("  本周全球市场弱势调整，A股承压。下周关注：")
-        lines.append("  ① 超跌板块是否存在反弹机会")
-        lines.append("  ② 政策面是否有维稳信号")
-        lines.append("  ③ 外围市场能否企稳")
+    ai_outlook = ai_weekly_outlook(a_share, us_data, asia_data, a_sectors, sector_weekly, week_range)
+    if ai_outlook:
+        lines.append(ai_outlook)
     else:
-        lines.append("  本周市场震荡，方向不明。下周关注：")
-        lines.append("  ① 成交量能否放大（资金入场信号）")
-        lines.append("  ② 热门板块轮动节奏")
-        lines.append("  ③ 宏观经济数据公布情况")
+        # 回退到规则分析
+        if avg_pct > 1.5:
+            lines.append("  本周全球市场表现强劲，A股情绪面偏暖。下周关注：")
+            lines.append("  ① 强势板块能否延续（如半导体、AI等）")
+            lines.append("  ② 外资流入/流出情况")
+            lines.append("  ③ 周末政策消息面变化")
+        elif avg_pct < -1.5:
+            lines.append("  本周全球市场弱势调整，A股承压。下周关注：")
+            lines.append("  ① 超跌板块是否存在反弹机会")
+            lines.append("  ② 政策面是否有维稳信号")
+            lines.append("  ③ 外围市场能否企稳")
+        else:
+            lines.append("  本周市场震荡，方向不明。下周关注：")
+            lines.append("  ① 成交量能否放大（资金入场信号）")
+            lines.append("  ② 热门板块轮动节奏")
+            lines.append("  ③ 宏观经济数据公布情况")
 
     return "\n".join(lines)
 
@@ -455,7 +503,7 @@ def main():
 
     # 5. 生成分析
     print("[分析] 生成周报...")
-    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range)
+    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range, sector_weekly)
 
     # 6. HTML邮件
     html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis, sector_weekly)
