@@ -239,77 +239,37 @@ def fetch_a_share_sectors() -> dict:
     import urllib.request
 
     for name, code in A_SHARE_SECTORS.items():
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fields=f43,f57,f58,f169,f170"
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f57,f58,f169,f170"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read().decode("utf-8"))
             d = data.get("data")
             if d and d.get("f57"):
-                raw_price = float(d.get("f43", 0))
+                pct = float(d.get("f170", 0))
+                if not _is_valid_pct(pct):
+                    print(f"  ⚠ 板块 {name}: 涨跌幅异常({pct}%)，跳过")
+                    continue
                 results[name] = {
                     "name": name,
-                    "price": _fix_api_scale(raw_price, raw_price),
-                    "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
-                    "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
+                    "price": float(d.get("f43", 0)),
+                    "change_pct": pct,
+                    "change": float(d.get("f169", 0)),
                 }
-                print(f"  ✓ 板块 {name}: {results[name]['change_pct']:+.2f}%")
+                print(f"  ✓ 板块 {name}: {pct:+.2f}%")
         except Exception as e:
             print(f"  ✗ 板块 {name}获取失败: {e}")
 
     return results
 
 
-def fetch_a_share_eastmoney() -> dict:
-    """通过东方财富API获取A股指数数据（稳定、免费）"""
-    results = {}
-    import urllib.request
-
-    for name, code in A_SHARE_INDICES.items():
-        # 判断市场：0开头=上海(1), 3开头=深圳(0)
-        market = "1" if code.startswith("0") else "0"
-        secid = f"{market}.{code}"
-        # fltt=2 强制返回标准浮点数格式，避免分为单位的精度问题
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fltt=2&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
-
-        for attempt in range(2):  # 最多重试1次
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp = urllib.request.urlopen(req, timeout=15)
-                raw = resp.read().decode("utf-8")
-                data = json.loads(raw)
-                d = data.get("data")
-                if d and d.get("f57"):
-                    price = float(d.get("f43", 0))
-                    # fltt=2 下数据已是标准格式，无需 _fix_api_scale
-                    if price <= 0:
-                        print(f"  ⚠ {name}: 价格异常({price})，跳过")
-                        break
-                    results[name] = {
-                        "name": name,
-                        "price": price,
-                        "change": float(d.get("f169", 0)),
-                        "change_pct": float(d.get("f170", 0)),
-                        "volume": str(d.get("f47", "")),
-                        "high": float(d.get("f44", 0)),
-                        "low": float(d.get("f45", 0)),
-                    }
-                    print(f"  ✓ {name}: {price:.2f} ({results[name]['change_pct']:+.2f}%)")
-                else:
-                    print(f"  ⚠ {name}: API返回无有效数据(f57缺失)")
-                break  # 成功则跳出重试
-            except Exception as e:
-                if attempt == 0:
-                    print(f"  ↻ {name}第1次获取失败({e})，重试中...")
-                else:
-                    print(f"  ✗ {name}获取失败: {e}")
-
-    return results
+def _is_valid_pct(pct: float) -> bool:
+    """检查涨跌幅是否在合理范围内（A股±22%，含ST和新股浮动）"""
+    return -22 <= pct <= 22
 
 
-def fetch_a_share_yfinance_fallback() -> dict:
-    """通过yfinance获取A股指数数据（东方财富API失败时的备用方案）"""
-    # yfinance 中 A股指数代码: 上海=.SS, 深圳=.SZ
+def fetch_a_share_yfinance() -> dict:
+    """通过yfinance获取A股指数数据（从GitHub服务器访问稳定可靠）"""
     yf_mapping = {
         "上证指数": "000001.SS",
         "深证成指": "399001.SZ",
@@ -336,37 +296,110 @@ def fetch_a_share_yfinance_fallback() -> dict:
                 "high": round(float(latest["High"]), 2),
                 "low": round(float(latest["Low"]), 2),
             }
-            print(f"  ✓ [备用] {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+            print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
         except Exception as e:
-            print(f"  ✗ [备用] {name}获取失败: {e}")
+            print(f"  ✗ {name}获取失败: {e}")
     return results
 
 
-def fetch_watchlist_data() -> dict:
-    """获取自选股/持仓个股实时行情"""
-    import urllib.request
+def fetch_a_share_eastmoney_fallback() -> dict:
+    """通过东方财富API获取A股指数（yfinance失败时的备用方案）"""
     results = {}
-    for name, code in WATCHLIST.items():
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fields=f43,f44,f45,f46,f47,f57,f58,f169,f170"
+    import urllib.request
+
+    for name, code in A_SHARE_INDICES.items():
+        market = "1" if code.startswith("0") else "0"
+        secid = f"{market}.{code}"
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fltt=2&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read().decode("utf-8"))
             d = data.get("data")
             if d and d.get("f57"):
-                raw_price = float(d.get("f43", 0))
+                price = float(d.get("f43", 0))
+                pct = float(d.get("f170", 0))
+                if price <= 0 or not _is_valid_pct(pct):
+                    print(f"  ⚠ {name}: 数据异常(price={price}, pct={pct})，跳过")
+                    continue
                 results[name] = {
                     "name": name,
-                    "price": _fix_api_scale(raw_price, raw_price),
-                    "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
-                    "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
-                    "high": _fix_api_scale(raw_price, float(d.get("f44", 0))),
-                    "low": _fix_api_scale(raw_price, float(d.get("f45", 0))),
+                    "price": price,
+                    "change": float(d.get("f169", 0)),
+                    "change_pct": pct,
+                    "volume": str(d.get("f47", "")),
+                    "high": float(d.get("f44", 0)),
+                    "low": float(d.get("f45", 0)),
+                }
+                print(f"  ✓ [备用] {name}: {price:.2f} ({pct:+.2f}%)")
+        except Exception as e:
+            print(f"  ✗ [备用] {name}获取失败: {e}")
+    return results
+
+
+def _stock_to_yfinance(secid: str) -> str:
+    """将东方财富格式(1.600519)转为yfinance格式(600519.SS)"""
+    if "." in secid:
+        market, code = secid.split(".", 1)
+        suffix = "SS" if market == "1" else "SZ"
+        return f"{code}.{suffix}"
+    return secid
+
+
+def fetch_watchlist_data() -> dict:
+    """获取自选股/持仓个股实时行情（东方财富优先，失败则yfinance备用）"""
+    import urllib.request
+    results = {}
+    for name, code in WATCHLIST.items():
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f44,f45,f46,f47,f57,f58,f169,f170"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            d = data.get("data")
+            if d and d.get("f57"):
+                price = float(d.get("f43", 0))
+                pct = float(d.get("f170", 0))
+                if price <= 0 or not _is_valid_pct(pct):
+                    print(f"  ⚠ {name}: 东方财富数据异常(price={price}, pct={pct}%)，切换备用源")
+                    raise ValueError(f"数据异常: pct={pct}")
+                results[name] = {
+                    "name": name,
+                    "price": price,
+                    "change": float(d.get("f169", 0)),
+                    "change_pct": pct,
+                    "high": float(d.get("f44", 0)),
+                    "low": float(d.get("f45", 0)),
                     "volume": str(d.get("f47", "")),
                 }
-                print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+                print(f"  ✓ {name}: {price:.2f} ({pct:+.2f}%)")
+                continue
         except Exception as e:
-            print(f"  ✗ {name}获取失败: {e}")
+            print(f"  ↻ {name} 东方财富失败({e})，尝试yfinance...")
+        # yfinance 备用
+        try:
+            yf_code = _stock_to_yfinance(code)
+            ticker = yf.Ticker(yf_code)
+            hist = ticker.history(period="5d")
+            if hist.empty:
+                print(f"  ✗ {name}: yfinance无数据")
+                continue
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) >= 2 else latest
+            change = latest["Close"] - prev["Close"]
+            change_pct = (change / prev["Close"]) * 100
+            results[name] = {
+                "name": name,
+                "price": round(float(latest["Close"]), 2),
+                "change": round(float(change), 2),
+                "change_pct": round(float(change_pct), 2),
+                "high": round(float(latest["High"]), 2),
+                "low": round(float(latest["Low"]), 2),
+                "volume": str(int(latest.get("Volume", 0))),
+            }
+            print(f"  ✓ [备用] {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+        except Exception as e2:
+            print(f"  ✗ {name}: yfinance也失败({e2})")
     return results
 
 
@@ -1041,12 +1074,12 @@ def main():
     elif weekday == 6:  # 周日
         date_str = (today - timedelta(days=2)).strftime("%Y年%m月%d日")
 
-    # 1. 抓取A股指数数据（东方财富优先，失败则yfinance备用）
+    # 1. 抓取A股指数数据（yfinance优先，从GitHub稳定；东方财富备用）
     print("[数据] 获取A股指数...")
-    a_share = fetch_a_share_eastmoney()
+    a_share = fetch_a_share_yfinance()
     if len(a_share) < 2:
-        print("  → 东方财富数据不足，切换yfinance备用源...")
-        a_share_fallback = fetch_a_share_yfinance_fallback()
+        print("  → yfinance数据不足，切换东方财富备用源...")
+        a_share_fallback = fetch_a_share_eastmoney_fallback()
         for k, v in a_share_fallback.items():
             if k not in a_share:
                 a_share[k] = v
