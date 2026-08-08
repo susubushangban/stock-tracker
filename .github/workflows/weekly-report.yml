@@ -2,7 +2,7 @@ name: 股市周报推送
 
 on:
   schedule:
-    - cron: "0 11 * * 0"
+      - cron: "0 11 * * 0"
   workflow_dispatch:
 
 jobs:
