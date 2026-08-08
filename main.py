@@ -269,30 +269,38 @@ def fetch_a_share_eastmoney() -> dict:
         # 判断市场：0开头=上海(1), 3开头=深圳(0)
         market = "1" if code.startswith("0") else "0"
         secid = f"{market}.{code}"
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
+        # fltt=2 强制返回标准浮点数格式，避免分为单位的精度问题
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fltt=2&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
 
         for attempt in range(2):  # 最多重试1次
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp = urllib.request.urlopen(req, timeout=10)
-                data = json.loads(resp.read().decode("utf-8"))
+                resp = urllib.request.urlopen(req, timeout=15)
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw)
                 d = data.get("data")
                 if d and d.get("f57"):
-                    raw_price = float(d.get("f43", 0))
+                    price = float(d.get("f43", 0))
+                    # fltt=2 下数据已是标准格式，无需 _fix_api_scale
+                    if price <= 0:
+                        print(f"  ⚠ {name}: 价格异常({price})，跳过")
+                        break
                     results[name] = {
                         "name": name,
-                        "price": _fix_api_scale(raw_price, raw_price),
-                        "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
-                        "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
+                        "price": price,
+                        "change": float(d.get("f169", 0)),
+                        "change_pct": float(d.get("f170", 0)),
                         "volume": str(d.get("f47", "")),
-                        "high": _fix_api_scale(raw_price, float(d.get("f44", 0))),
-                        "low": _fix_api_scale(raw_price, float(d.get("f45", 0))),
+                        "high": float(d.get("f44", 0)),
+                        "low": float(d.get("f45", 0)),
                     }
-                    print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+                    print(f"  ✓ {name}: {price:.2f} ({results[name]['change_pct']:+.2f}%)")
+                else:
+                    print(f"  ⚠ {name}: API返回无有效数据(f57缺失)")
                 break  # 成功则跳出重试
             except Exception as e:
                 if attempt == 0:
-                    print(f"  ↻ {name}第1次获取失败，重试中...")
+                    print(f"  ↻ {name}第1次获取失败({e})，重试中...")
                 else:
                     print(f"  ✗ {name}获取失败: {e}")
 
