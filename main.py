@@ -76,12 +76,30 @@ A_SHARE_SECTORS = {
     "创新药":      "90.BK0444",
 }
 
-# 自选股/持仓列表（东方财富代码格式：上海=1.代码，深圳=0.代码）
-WATCHLIST = {
-    "贵州茅台": "1.600519",
-    "宁德时代": "0.300750",
-    "比亚迪":   "0.002594",
-}
+# 自选股/持仓列表
+# 优先从 GitHub Secret WATCHLIST_CONFIG 读取，格式：名称:市场.代码,名称:市场.代码
+# 未配置时使用下方默认列表
+# 示例：贵州茅台:1.600519,宁德时代:0.300750,比亚迪:0.002594
+def _parse_watchlist() -> dict:
+    config = os.environ.get("WATCHLIST_CONFIG", "")
+    if config.strip():
+        result = {}
+        for item in config.split(","):
+            item = item.strip()
+            if ":" in item:
+                name, code = item.split(":", 1)
+                result[name.strip()] = code.strip()
+        if result:
+            print(f"[配置] 从 Secrets 加载自选股: {list(result.keys())}")
+            return result
+    # 默认列表（未配置 WATCHLIST_CONFIG 时使用）
+    return {
+        "贵州茅台": "1.600519",
+        "宁德时代": "0.300750",
+        "比亚迪":   "0.002594",
+    }
+
+WATCHLIST = _parse_watchlist()
 
 
 def fetch_top_movers(top_n: int = 8) -> tuple:
