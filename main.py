@@ -312,11 +312,11 @@ def fetch_watchlist_data() -> dict:
             if d and d.get("f57"):
                 results[name] = {
                     "name": name,
-                    "price": float(d.get("f43", 0)),
-                    "change": float(d.get("f169", 0)),
-                    "change_pct": float(d.get("f170", 0)),
-                    "high": float(d.get("f44", 0)),
-                    "low": float(d.get("f45", 0)),
+                    "price": float(d.get("f43", 0)) / 100,
+                    "change": float(d.get("f169", 0)) / 100,
+                    "change_pct": float(d.get("f170", 0)) / 100,
+                    "high": float(d.get("f44", 0)) / 100,
+                    "low": float(d.get("f45", 0)) / 100,
                     "volume": str(d.get("f47", "")),
                 }
                 print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
