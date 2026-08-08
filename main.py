@@ -111,6 +111,13 @@ def _parse_watchlist() -> dict:
 WATCHLIST = _parse_watchlist()
 
 
+def _fix_api_scale(price: float, value: float) -> float:
+    """自动校正东方财富API数据精度（价格>10万说明是分为单位，需÷100）"""
+    if abs(price) > 100000:
+        return value / 100
+    return value
+
+
 def fetch_top_movers(top_n: int = 8) -> tuple:
     """获取A股涨幅榜和跌幅榜前N个股（东方财富实时行情排行）"""
     import urllib.request
@@ -239,11 +246,12 @@ def fetch_a_share_sectors() -> dict:
             data = json.loads(resp.read().decode("utf-8"))
             d = data.get("data")
             if d and d.get("f57"):
+                raw_price = float(d.get("f43", 0))
                 results[name] = {
                     "name": name,
-                    "price": float(d.get("f43", 0)),
-                    "change_pct": float(d.get("f170", 0)),
-                    "change": float(d.get("f169", 0)),
+                    "price": _fix_api_scale(raw_price, raw_price),
+                    "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
+                    "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
                 }
                 print(f"  ✓ 板块 {name}: {results[name]['change_pct']:+.2f}%")
         except Exception as e:
@@ -270,14 +278,15 @@ def fetch_a_share_eastmoney() -> dict:
                 data = json.loads(resp.read().decode("utf-8"))
                 d = data.get("data")
                 if d and d.get("f57"):
+                    raw_price = float(d.get("f43", 0))
                     results[name] = {
                         "name": name,
-                        "price": float(d.get("f43", 0)),
-                        "change": float(d.get("f169", 0)),
-                        "change_pct": float(d.get("f170", 0)),
+                        "price": _fix_api_scale(raw_price, raw_price),
+                        "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
+                        "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
                         "volume": str(d.get("f47", "")),
-                        "high": float(d.get("f44", 0)),
-                        "low": float(d.get("f45", 0)),
+                        "high": _fix_api_scale(raw_price, float(d.get("f44", 0))),
+                        "low": _fix_api_scale(raw_price, float(d.get("f45", 0))),
                     }
                     print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
                 break  # 成功则跳出重试
@@ -337,13 +346,14 @@ def fetch_watchlist_data() -> dict:
             data = json.loads(resp.read().decode("utf-8"))
             d = data.get("data")
             if d and d.get("f57"):
+                raw_price = float(d.get("f43", 0))
                 results[name] = {
                     "name": name,
-                    "price": float(d.get("f43", 0)) / 100,
-                    "change": float(d.get("f169", 0)) / 100,
-                    "change_pct": float(d.get("f170", 0)) / 100,
-                    "high": float(d.get("f44", 0)) / 100,
-                    "low": float(d.get("f45", 0)) / 100,
+                    "price": _fix_api_scale(raw_price, raw_price),
+                    "change": _fix_api_scale(raw_price, float(d.get("f169", 0))),
+                    "change_pct": _fix_api_scale(raw_price, float(d.get("f170", 0))),
+                    "high": _fix_api_scale(raw_price, float(d.get("f44", 0))),
+                    "low": _fix_api_scale(raw_price, float(d.get("f45", 0))),
                     "volume": str(d.get("f47", "")),
                 }
                 print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
