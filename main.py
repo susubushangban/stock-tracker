@@ -139,7 +139,8 @@ def fetch_top_movers(top_n: int = 8) -> tuple:
         data = json.loads(resp.read().decode("utf-8"))
         for item in data.get("data", {}).get("diff", []):
             name = item.get("f14", "")
-            if "ST" in name or "*ST" in name or name.startswith("N"):
+            # 只过滤*ST，保留ST和N开头的新股（新股涨幅有参考价值）
+            if "*ST" in name:
                 continue
             top_gainers.append({
                 "name": name,
@@ -166,7 +167,7 @@ def fetch_top_movers(top_n: int = 8) -> tuple:
         data = json.loads(resp.read().decode("utf-8"))
         for item in data.get("data", {}).get("diff", []):
             name = item.get("f14", "")
-            if "ST" in name or "*ST" in name or name.startswith("N"):
+            if "*ST" in name:
                 continue
             top_losers.append({
                 "name": name,
