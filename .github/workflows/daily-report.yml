@@ -24,4 +24,5 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          WATCHLIST_CONFIG: ${{ secrets.WATCHLIST_CONFIG }}
         run: python main.py
