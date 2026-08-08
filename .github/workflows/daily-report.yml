@@ -2,23 +2,28 @@ name: 股市日报推送
 
 on:
   schedule:
-    - cron: "0 23 * * 0-4"
+    # 北京时间 周二~周五 7:30 = UTC 周一~周四 23:30
+    - cron: "30 23 * * 1-4"
   workflow_dispatch:
 
 jobs:
-  report:
+  daily:
     runs-on: ubuntu-latest
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
       - name: 安装Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: 安装依赖
         run: pip install -r requirements.txt
-      - name: 运行报告脚本
-      env:
+
+      - name: 运行日报脚本
+        env:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
