@@ -77,9 +77,18 @@ A_SHARE_SECTORS = {
 }
 
 # 自选股/持仓列表
-# 优先从 GitHub Secret WATCHLIST_CONFIG 读取，格式：名称:市场.代码,名称:市场.代码
-# 未配置时使用下方默认列表
-# 示例：贵州茅台:1.600519,宁德时代:0.300750,比亚迪:0.002594
+# 优先从 GitHub Secret WATCHLIST_CONFIG 读取
+# 格式：名称:股票代码,名称:股票代码（市场前缀自动识别，无需手动填写）
+# 示例：贵州茅台:600519,宁德时代:300750,比亚迪:002594
+def _auto_market(code: str) -> str:
+    """根据股票代码自动识别市场：6开头=上海(1)，0/3开头=深圳(0)"""
+    code = code.strip()
+    if code.startswith("6"):
+        return f"1.{code}"
+    elif code.startswith("0") or code.startswith("3"):
+        return f"0.{code}"
+    return code  # 已带前缀则原样返回
+
 def _parse_watchlist() -> dict:
     config = os.environ.get("WATCHLIST_CONFIG", "")
     if config.strip():
@@ -88,7 +97,7 @@ def _parse_watchlist() -> dict:
             item = item.strip()
             if ":" in item:
                 name, code = item.split(":", 1)
-                result[name.strip()] = code.strip()
+                result[name.strip()] = _auto_market(code)
         if result:
             print(f"[配置] 从 Secrets 加载自选股: {list(result.keys())}")
             return result
