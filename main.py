@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
+import requests as _requests
 import yfinance as yf
 
 # ============================================================
@@ -228,25 +229,65 @@ def fetch_a_share_eastmoney() -> dict:
         secid = f"{market}.{code}"
         url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170"
 
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read().decode("utf-8"))
-            d = data.get("data")
-            if d and d.get("f57"):
-                results[name] = {
-                    "name": name,
-                    "price": float(d.get("f43", 0)),
-                    "change": float(d.get("f169", 0)),
-                    "change_pct": float(d.get("f170", 0)),
-                    "volume": str(d.get("f47", "")),
-                    "high": float(d.get("f44", 0)),
-                    "low": float(d.get("f45", 0)),
-                }
-                print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
-        except Exception as e:
-            print(f"  ✗ {name}获取失败: {e}")
+        for attempt in range(2):  # 最多重试1次
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read().decode("utf-8"))
+                d = data.get("data")
+                if d and d.get("f57"):
+                    results[name] = {
+                        "name": name,
+                        "price": float(d.get("f43", 0)),
+                        "change": float(d.get("f169", 0)),
+                        "change_pct": float(d.get("f170", 0)),
+                        "volume": str(d.get("f47", "")),
+                        "high": float(d.get("f44", 0)),
+                        "low": float(d.get("f45", 0)),
+                    }
+                    print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+                break  # 成功则跳出重试
+            except Exception as e:
+                if attempt == 0:
+                    print(f"  ↻ {name}第1次获取失败，重试中...")
+                else:
+                    print(f"  ✗ {name}获取失败: {e}")
 
+    return results
+
+
+def fetch_a_share_yfinance_fallback() -> dict:
+    """通过yfinance获取A股指数数据（东方财富API失败时的备用方案）"""
+    # yfinance 中 A股指数代码: 上海=.SS, 深圳=.SZ
+    yf_mapping = {
+        "上证指数": "000001.SS",
+        "深证成指": "399001.SZ",
+        "沪深300":  "000300.SS",
+        "创业板指": "399006.SZ",
+    }
+    results = {}
+    for name, code in yf_mapping.items():
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="5d")
+            if hist.empty:
+                continue
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) >= 2 else latest
+            change = latest["Close"] - prev["Close"]
+            change_pct = (change / prev["Close"]) * 100
+            results[name] = {
+                "name": name,
+                "price": round(float(latest["Close"]), 2),
+                "change": round(float(change), 2),
+                "change_pct": round(float(change_pct), 2),
+                "volume": str(int(latest.get("Volume", 0))),
+                "high": round(float(latest["High"]), 2),
+                "low": round(float(latest["Low"]), 2),
+            }
+            print(f"  ✓ [备用] {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+        except Exception as e:
+            print(f"  ✗ [备用] {name}获取失败: {e}")
     return results
 
 
@@ -431,8 +472,9 @@ def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data
     return "\n".join(lines)
 
 
-def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict) -> Optional[str]:
-    """使用DeepSeek API进行深度AI分析（需要配置DEEPSEEK_API_KEY）"""
+def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict,
+                     top_movers: list = None, top_losers: list = None, concept_rank: dict = None) -> Optional[str]:
+    """使用DeepSeek API生成结构化决策仪表盘分析报告"""
     if not DEEPSEEK_API_KEY:
         return None
 
@@ -440,31 +482,54 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
         from openai import OpenAI
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
-        # 构建数据摘要
-        data_summary = json.dumps({
+        # 构建丰富的数据摘要（含异动个股、概念板块）
+        data_parts = {
             "A股指数": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in a_share.items()},
             "A股板块": {k: f"{v['change_pct']:+.2f}%" for k, v in a_share_sectors.items()},
             "美股": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in us_data.items()},
             "日韩": {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in asia_data.items()},
             "美股板块": {k: f"{v['change_pct']:+.2f}%" for k, v in sectors.items()},
-        }, ensure_ascii=False, indent=2)
+        }
+        if top_movers:
+            data_parts["A股涨幅榜"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in top_movers[:5]]
+        if top_losers:
+            data_parts["A股跌幅榜"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in top_losers[:5]]
+        if concept_rank:
+            if concept_rank.get("top"):
+                data_parts["领涨概念"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in concept_rank["top"][:4]]
+            if concept_rank.get("bottom"):
+                data_parts["领跌概念"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in concept_rank["bottom"][:4]]
+
+        data_summary = json.dumps(data_parts, ensure_ascii=False, indent=2)
 
         prompt = f"""你是资深股市分析师。以下是今日全球市场数据（JSON格式）：
 
 {data_summary}
 
-请用300字以内，简明扼要地：
-1. 总结各市场整体表现
-2. 重点分析A股热门板块动向及可能对相关行业产生的影响
-3. 标注1-2个值得关注的风险点或机会
+请生成一份结构化股市日报，严格按以下格式输出（使用emoji标记，500字以内）：
 
-要求：语言通俗易懂，适合非专业投资者阅读，重点关注A股相关影响。"""
+【📊 市场总览】（1-2句话概括 + 综合评分X/10）
+
+【🔥 板块动向】
+▎A股板块：领涨/领跌分析
+▎全球板块：关键变化
+
+【⚠️ 风险警报】（2-3条，每条用❗开头）
+
+【💡 利好催化】（2-3条，每条用✅开头）
+
+【🎯 操作建议】
+▎仓位：（建议仓位水平）
+▎关注：（值得关注的方向）
+▎回避：（需要回避的方向）
+
+要求：语言通俗易懂，适合非专业投资者阅读。重点关注A股相关影响，给出实操性建议。"""
 
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=600,
+            max_tokens=1200,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -623,6 +688,58 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
     return html
 
 
+def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = None):
+    """发送 Webhook 通知（企业微信/飞书，需配置对应 Secrets）"""
+    # ---- 构建推送摘要 ----
+    lines = ["📊 今日市场摘要"]
+    if a_share:
+        parts = [f"{n} {d['price']:.2f}({d['change_pct']:+.2f}%)" for n, d in a_share.items()]
+        lines.append("A股：" + " | ".join(parts))
+    if us_data:
+        parts = [f"{n} {d['change_pct']:+.2f}%" for n, d in us_data.items()]
+        lines.append("美股：" + " | ".join(parts))
+    if asia_data:
+        parts = [f"{n} {d['change_pct']:+.2f}%" for n, d in asia_data.items()]
+        lines.append("日韩：" + " | ".join(parts))
+    # 附加 AI 分析摘要
+    if ai_text:
+        lines.append("")
+        lines.append(ai_text[:300])
+    msg = "\n".join(lines)
+
+    # ---- 企业微信机器人 ----
+    wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+    if wecom_url:
+        try:
+            payload = {"msgtype": "text", "text": {"content": msg}}
+            r = _requests.post(wecom_url, json=payload, timeout=10)
+            if r.status_code == 200 and r.json().get("errcode") == 0:
+                print("[企微通知] 发送成功 ✓")
+            else:
+                print(f"[企微通知] 发送失败: {r.text}")
+        except Exception as e:
+            print(f"[企微通知] 发送失败: {e}")
+
+    # ---- 飞书机器人 ----
+    feishu_url = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if feishu_url:
+        try:
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {"title": {"tag": "plain_text", "content": "📊 全球股市日报"}},
+                    "elements": [{"tag": "markdown", "content": msg}]
+                }
+            }
+            r = _requests.post(feishu_url, json=payload, timeout=10)
+            if r.status_code == 200 and r.json().get("code", -1) == 0:
+                print("[飞书通知] 发送成功 ✓")
+            else:
+                print(f"[飞书通知] 发送失败: {r.text}")
+        except Exception as e:
+            print(f"[飞书通知] 发送失败: {e}")
+
+
 def send_email(html_content: str, subject: str):
     """发送HTML邮件"""
     msg = MIMEMultipart("alternative")
@@ -657,9 +774,15 @@ def main():
     elif weekday == 6:  # 周日
         date_str = (today - timedelta(days=2)).strftime("%Y年%m月%d日")
 
-    # 1. 抓取A股指数数据
+    # 1. 抓取A股指数数据（东方财富优先，失败则yfinance备用）
     print("[数据] 获取A股指数...")
     a_share = fetch_a_share_eastmoney()
+    if len(a_share) < 2:
+        print("  → 东方财富数据不足，切换yfinance备用源...")
+        a_share_fallback = fetch_a_share_yfinance_fallback()
+        for k, v in a_share_fallback.items():
+            if k not in a_share:
+                a_share[k] = v
     print(f"  → 获取到 {len(a_share)} 个指数")
 
     # 2. 抓取A股板块数据
@@ -697,7 +820,8 @@ def main():
     rule_text = rule_analysis(a_share, a_share_sectors, us_data, asia_data, sectors)
 
     # 7. AI深度分析（如果配置了API Key）
-    ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors)
+    ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors,
+                               top_movers, top_losers, concept_rank)
     if ai_text:
         print("[AI] DeepSeek分析完成")
     else:
@@ -712,6 +836,10 @@ def main():
     print("[邮件] 发送中...")
     subject = f"📊 全球股市日报 - {date_str}"
     send_email(html, subject)
+
+    # 10. Webhook 通知（企微/飞书）
+    print("[通知] 发送 Webhook 通知...")
+    send_webhook(a_share, us_data, asia_data, ai_text)
 
     print("[完成] 全部任务执行完毕 ✓")
 
