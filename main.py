@@ -76,6 +76,13 @@ A_SHARE_SECTORS = {
     "创新药":      "90.BK0444",
 }
 
+# 自选股/持仓列表（东方财富代码格式：上海=1.代码，深圳=0.代码）
+WATCHLIST = {
+    "贵州茅台": "1.600519",
+    "宁德时代": "0.300750",
+    "比亚迪":   "0.002594",
+}
+
 
 def fetch_top_movers(top_n: int = 8) -> tuple:
     """获取A股涨幅榜和跌幅榜前N个股（东方财富实时行情排行）"""
@@ -291,6 +298,54 @@ def fetch_a_share_yfinance_fallback() -> dict:
     return results
 
 
+def fetch_watchlist_data() -> dict:
+    """获取自选股/持仓个股实时行情"""
+    import urllib.request
+    results = {}
+    for name, code in WATCHLIST.items():
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fields=f43,f44,f45,f46,f47,f57,f58,f169,f170"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            d = data.get("data")
+            if d and d.get("f57"):
+                results[name] = {
+                    "name": name,
+                    "price": float(d.get("f43", 0)),
+                    "change": float(d.get("f169", 0)),
+                    "change_pct": float(d.get("f170", 0)),
+                    "high": float(d.get("f44", 0)),
+                    "low": float(d.get("f45", 0)),
+                    "volume": str(d.get("f47", "")),
+                }
+                print(f"  ✓ {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
+        except Exception as e:
+            print(f"  ✗ {name}获取失败: {e}")
+    return results
+
+
+def fetch_market_news(top_n: int = 8) -> list:
+    """获取最新财经新闻（东方财富滚动新闻）"""
+    import urllib.request
+    news = []
+    url = (f"https://push2ex.eastmoney.com/getAllStockNewsList?"
+           f"pageSize={top_n}&pageNo=1&fields=title,showTime,url")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("list", []):
+            news.append({
+                "title": item.get("title", ""),
+                "time": item.get("showTime", ""),
+            })
+        print(f"  ✓ 获取到 {len(news)} 条新闻")
+    except Exception as e:
+        print(f"  ✗ 新闻获取失败: {e}")
+    return news
+
+
 def fetch_yfinance_data(symbols: dict) -> dict:
     """通过yfinance获取美股/日韩数据"""
     results = {}
@@ -473,7 +528,8 @@ def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data
 
 
 def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict,
-                     top_movers: list = None, top_losers: list = None, concept_rank: dict = None) -> Optional[str]:
+                     top_movers: list = None, top_losers: list = None, concept_rank: dict = None,
+                     watchlist: dict = None, news: list = None) -> Optional[str]:
     """使用DeepSeek API生成结构化决策仪表盘分析报告"""
     if not DEEPSEEK_API_KEY:
         return None
@@ -499,6 +555,10 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
                 data_parts["领涨概念"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in concept_rank["top"][:4]]
             if concept_rank.get("bottom"):
                 data_parts["领跌概念"] = [f"{s['name']}({s['change_pct']:+.1f}%)" for s in concept_rank["bottom"][:4]]
+        if watchlist:
+            data_parts["自选股"] = {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in watchlist.items()}
+        if news:
+            data_parts["最新新闻"] = [n["title"] for n in news[:5]]
 
         data_summary = json.dumps(data_parts, ensure_ascii=False, indent=2)
 
@@ -524,6 +584,10 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
 ▎回避：（需要回避的方向）
 
 要求：语言通俗易懂，适合非专业投资者阅读。重点关注A股相关影响，给出实操性建议。"""
+        if watchlist:
+            prompt += "\n\n请额外对自选股持仓逐一给出简短点评（1-2句）。"
+        if news:
+            prompt += "\n请结合最新新闻事件分析对市场的潜在影响。"
 
         response = client.chat.completions.create(
             model="deepseek-chat",
@@ -540,7 +604,8 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
 def generate_html_report(date_str: str, a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict,
                           sectors: dict, rule_text: str, ai_text: Optional[str],
                           top_movers: list = None, top_losers: list = None,
-                          concept_rank: dict = None) -> str:
+                          concept_rank: dict = None,
+                          watchlist: dict = None, news: list = None) -> str:
     """生成HTML格式的邮件报告"""
     # 判断整体涨跌
     all_pct = []
@@ -641,6 +706,25 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
                 tags = " ".join([f'<span class="tag" style="background:#eafaf1;color:#1e8449;">{s["name"]} {s["change_pct"]:+.1f}%</span>' for s in concept_rank["bottom"][:4]])
                 html += f'<div style="margin-top:6px;"><b style="font-size:13px;">❄️ 领跌概念：</b>{tags}</div>'
 
+        html += "</div>"
+
+    # 自选股持仓
+    if watchlist:
+        html += '<div class="card"><div class="section-title">💼 自选股持仓</div>'
+        for name, d in watchlist.items():
+            cls = "red" if d["change_pct"] > 0 else ("green" if d["change_pct"] < 0 else "gray")
+            html += f"""<div class="idx">
+  <span class="idx-name">{name}</span>
+  <span class="idx-price"><b>{d['price']:.2f}</b> <span class="{cls}">{d['change_pct']:+.2f}%</span></span>
+</div>"""
+        html += "</div>"
+
+    # 市场新闻
+    if news:
+        html += '<div class="card"><div class="section-title">📰 最新财经资讯</div>'
+        for n in news[:6]:
+            t = n.get("time", "")
+            html += f'<div style="padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:13px;"><span class="gray" style="font-size:11px;">{t}</span> {n["title"]}</div>'
         html += "</div>"
 
     # 美股
@@ -800,6 +884,15 @@ def main():
     concept_rank = fetch_concept_sector_ranking(6)
     print(f"  → 领涨{len(concept_rank.get('top', []))}个，领跌{len(concept_rank.get('bottom', []))}个")
 
+    # 2.7 获取自选股行情
+    print("[数据] 获取自选股行情...")
+    watchlist = fetch_watchlist_data()
+    print(f"  → 获取到 {len(watchlist)} 只自选股")
+
+    # 2.8 获取市场新闻
+    print("[数据] 获取市场新闻...")
+    news = fetch_market_news(8)
+
     # 3. 抓取美股数据
     print("[数据] 获取美股数据...")
     us_data = fetch_yfinance_data(US_INDICES)
@@ -821,7 +914,7 @@ def main():
 
     # 7. AI深度分析（如果配置了API Key）
     ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors,
-                               top_movers, top_losers, concept_rank)
+                               top_movers, top_losers, concept_rank, watchlist, news)
     if ai_text:
         print("[AI] DeepSeek分析完成")
     else:
@@ -830,7 +923,7 @@ def main():
     # 8. 生成HTML邮件
     print("[报告] 生成报告...")
     html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text,
-                                top_movers, top_losers, concept_rank)
+                                top_movers, top_losers, concept_rank, watchlist, news)
 
     # 9. 发送邮件
     print("[邮件] 发送中...")
