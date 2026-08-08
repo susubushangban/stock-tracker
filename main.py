@@ -346,6 +346,128 @@ def fetch_market_news(top_n: int = 8) -> list:
     return news
 
 
+def fetch_kline_eastmoney(secid: str, days: int = 60) -> list:
+    """获取东方财富日K线历史数据"""
+    import urllib.request
+    url = (f"http://push2his.eastmoney.com/api/qt/stock/kline/get?"
+           f"secid={secid}&fields1=f1,f2,f3,f4,f5,f6"
+           f"&fields2=f51,f52,f53,f54,f55,f56,f57"
+           f"&klt=101&fqt=1&lmt={days}&end=20500101")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        klines = []
+        for line in data.get("data", {}).get("klines", []):
+            parts = line.split(",")
+            klines.append({
+                "date": parts[0], "open": float(parts[1]),
+                "close": float(parts[2]), "high": float(parts[3]),
+                "low": float(parts[4]), "volume": float(parts[5]),
+            })
+        return klines
+    except Exception as e:
+        print(f"  ✗ K线获取失败: {e}")
+        return []
+
+
+def fetch_kline_yfinance(symbol: str, days: int = 60) -> list:
+    """获取yfinance日K线历史数据"""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period=f"{days+10}d")
+        klines = []
+        for idx, row in hist.iterrows():
+            klines.append({
+                "date": idx.strftime("%Y-%m-%d"),
+                "open": float(row["Open"]), "close": float(row["Close"]),
+                "high": float(row["High"]), "low": float(row["Low"]),
+                "volume": float(row["Volume"]),
+            })
+        return klines
+    except Exception:
+        return []
+
+
+def analyze_strategy(name: str, klines: list) -> dict:
+    """计算技术指标并生成策略信号（MA/MACD/RSI/布林带）"""
+    if len(klines) < 20:
+        return {"name": name, "signals": []}
+    closes = [k["close"] for k in klines]
+    volumes = [k["volume"] for k in klines]
+    signals = []
+
+    def ma(data, n):
+        return sum(data[-n:]) / n if len(data) >= n else None
+
+    ma5, ma10, ma20 = ma(closes, 5), ma(closes, 10), ma(closes, 20)
+    # 均线趋势
+    if ma5 and ma10 and ma20:
+        if ma5 > ma10 > ma20:
+            signals.append("📈 均线多头排列")
+        elif ma5 < ma10 < ma20:
+            signals.append("📉 均线空头排列")
+        if closes[-1] > ma5 > ma10:
+            signals.append("✅ 价格站上均线")
+        elif closes[-1] < ma5 < ma10:
+            signals.append("⚠️ 价格跌破均线")
+    # MACD
+    if len(closes) >= 26:
+        ema12, ema26 = closes[-12:].__iter__(), closes[-26:].__iter__()
+        e12 = sum(closes[-12:]) / 12
+        e26 = sum(closes[-26:]) / 26
+        dif = e12 - e26
+        e12_prev = sum(closes[-13:-1]) / 12
+        e26_prev = sum(closes[-27:-1]) / 26
+        dif_prev = e12_prev - e26_prev
+        dea = (dif + dif_prev) / 2
+        dea_prev_val = sum(closes[-27:-1]) / 26
+        if dif > 0 and dif_prev <= 0:
+            signals.append("🔴 MACD金叉")
+        elif dif < 0 and dif_prev >= 0:
+            signals.append("🟢 MACD死叉")
+        elif dif > dea > 0:
+            signals.append("📈 MACD多头")
+        elif dif < dea < 0:
+            signals.append("📉 MACD空头")
+    # RSI
+    if len(closes) >= 15:
+        gains, losses = [], []
+        for i in range(-14, 0):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(0, diff))
+            losses.append(max(0, -diff))
+        avg_gain = sum(gains) / 14
+        avg_loss = sum(losses) / 14
+        rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+        if rsi > 70:
+            signals.append(f"⚠️ RSI超买({rsi:.0f})")
+        elif rsi < 30:
+            signals.append(f"✅ RSI超卖({rsi:.0f})")
+        else:
+            signals.append(f"📊 RSI中性({rsi:.0f})")
+    # 布林带
+    if len(closes) >= 20:
+        sma20 = sum(closes[-20:]) / 20
+        std20 = (sum((c - sma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+        upper = sma20 + 2 * std20
+        lower = sma20 - 2 * std20
+        if closes[-1] > upper:
+            signals.append("⚠️ 突破布林上轨(注意压力)")
+        elif closes[-1] < lower:
+            signals.append("✅ 触及布林下轨(或有支撑)")
+    # 量能
+    if len(volumes) >= 6:
+        vol5 = sum(volumes[-5:]) / 5
+        vol_prev5 = sum(volumes[-10:-5]) / 5
+        if vol5 > vol_prev5 * 1.3:
+            signals.append("📈 明显放量")
+        elif vol5 < vol_prev5 * 0.7:
+            signals.append("📉 明显缩量")
+
+    return {"name": name, "signals": signals}
+
+
 def fetch_yfinance_data(symbols: dict) -> dict:
     """通过yfinance获取美股/日韩数据"""
     results = {}
@@ -384,7 +506,8 @@ def fetch_sector_data() -> dict:
     return fetch_yfinance_data(SECTOR_ETFS)
 
 
-def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict) -> str:
+def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict,
+                  strategy_signals: list = None) -> str:
     """基于规则的数据分析（不依赖外部AI API）"""
     lines = []
     lines.append("【📊 市场概览】\n")
@@ -529,7 +652,8 @@ def rule_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data
 
 def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_data: dict, sectors: dict,
                      top_movers: list = None, top_losers: list = None, concept_rank: dict = None,
-                     watchlist: dict = None, news: list = None) -> Optional[str]:
+                     watchlist: dict = None, news: list = None,
+                     strategy_signals: list = None) -> Optional[str]:
     """使用DeepSeek API生成结构化决策仪表盘分析报告"""
     if not DEEPSEEK_API_KEY:
         return None
@@ -559,6 +683,8 @@ def ai_deep_analysis(a_share: dict, a_share_sectors: dict, us_data: dict, asia_d
             data_parts["自选股"] = {k: f"{v['price']:.2f}({v['change_pct']:+.2f}%)" for k, v in watchlist.items()}
         if news:
             data_parts["最新新闻"] = [n["title"] for n in news[:5]]
+        if strategy_signals:
+            data_parts["技术信号"] = {s["name"]: s["signals"] for s in strategy_signals if s["signals"]}
 
         data_summary = json.dumps(data_parts, ensure_ascii=False, indent=2)
 
@@ -605,7 +731,8 @@ def generate_html_report(date_str: str, a_share: dict, a_share_sectors: dict, us
                           sectors: dict, rule_text: str, ai_text: Optional[str],
                           top_movers: list = None, top_losers: list = None,
                           concept_rank: dict = None,
-                          watchlist: dict = None, news: list = None) -> str:
+                          watchlist: dict = None, news: list = None,
+                          strategy_signals: list = None) -> str:
     """生成HTML格式的邮件报告"""
     # 判断整体涨跌
     all_pct = []
@@ -726,6 +853,17 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
             t = n.get("time", "")
             html += f'<div style="padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:13px;"><span class="gray" style="font-size:11px;">{t}</span> {n["title"]}</div>'
         html += "</div>"
+
+    # 策略信号
+    if strategy_signals:
+        has_any = any(s.get("signals") for s in strategy_signals)
+        if has_any:
+            html += '<div class="card"><div class="section-title">📐 技术策略信号</div>'
+            for s in strategy_signals:
+                if s.get("signals"):
+                    tags = " ".join([f'<span class="tag">{sig}</span>' for sig in s["signals"]])
+                    html += f'<div style="padding:6px 0;border-bottom:1px solid #f0f0f0;"><b style="font-size:13px;">{s["name"]}</b><div style="margin-top:4px;">{tags}</div></div>'
+            html += "</div>"
 
     # 美股
     if us_data:
@@ -908,13 +1046,31 @@ def main():
     sectors = fetch_sector_data()
     print(f"  → 获取到 {len(sectors)} 个板块")
 
+    # 5.5 技术指标分析
+    print("[分析] 计算技术指标...")
+    strategy_signals = []
+    for name, code in A_SHARE_INDICES.items():
+        market = "1" if code.startswith("0") else "0"
+        klines = fetch_kline_eastmoney(f"{market}.{code}")
+        if klines:
+            sig = analyze_strategy(name, klines)
+            strategy_signals.append(sig)
+            print(f"  ✓ {name}: {len(sig['signals'])}个信号")
+    for name, code in {"标普500": "^GSPC", "纳斯达克": "^IXIC"}.items():
+        klines = fetch_kline_yfinance(code)
+        if klines:
+            sig = analyze_strategy(name, klines)
+            strategy_signals.append(sig)
+            print(f"  ✓ {name}: {len(sig['signals'])}个信号")
+
     # 6. 规则分析
     print("[分析] 执行规则分析...")
-    rule_text = rule_analysis(a_share, a_share_sectors, us_data, asia_data, sectors)
+    rule_text = rule_analysis(a_share, a_share_sectors, us_data, asia_data, sectors, strategy_signals)
 
     # 7. AI深度分析（如果配置了API Key）
     ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors,
-                               top_movers, top_losers, concept_rank, watchlist, news)
+                               top_movers, top_losers, concept_rank, watchlist, news,
+                               strategy_signals)
     if ai_text:
         print("[AI] DeepSeek分析完成")
     else:
@@ -923,7 +1079,7 @@ def main():
     # 8. 生成HTML邮件
     print("[报告] 生成报告...")
     html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text,
-                                top_movers, top_losers, concept_rank, watchlist, news)
+                                top_movers, top_losers, concept_rank, watchlist, news, strategy_signals)
 
     # 9. 发送邮件
     print("[邮件] 发送中...")
