@@ -65,16 +65,8 @@ SECTOR_ETFS = {
 }
 
 # A股热门板块（东方财富板块代码，90.xxx格式）
-A_SHARE_SECTORS = {
-    "半导体":      "90.BK1036",
-    "人工智能":    "90.BK0800",
-    "航天航空":    "90.BK0488",
-    "芯片概念":    "90.BK0893",
-    "机器人":      "90.BK0609",
-    "新能源":      "90.BK0493",
-    "消费电子":    "90.BK0447",
-    "创新药":      "90.BK0444",
-}
+# 已改为动态获取：fetch_a_share_sectors() 自动从东方财富获取当日行业板块排行 TOP10
+# 不再需要硬编码列表
 
 # 自选股/持仓列表
 # 优先从 GitHub Secret WATCHLIST_CONFIG 读取
@@ -234,32 +226,38 @@ def fetch_concept_sector_ranking(top_n: int = 6) -> dict:
     return results
 
 
-def fetch_a_share_sectors() -> dict:
-    """通过东方财富API获取A股热门板块涨跌数据"""
+def fetch_a_share_sectors(top_n: int = 10) -> dict:
+    """动态获取A股行业板块排行（东方财富API，自动发现当日热点）"""
     results = {}
     import urllib.request
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    for name, code in A_SHARE_SECTORS.items():
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f57,f58,f169,f170"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read().decode("utf-8"))
-            d = data.get("data")
-            if d and d.get("f57"):
-                pct = float(d.get("f170", 0))
-                if not _is_valid_pct(pct):
-                    print(f"  ⚠ 板块 {name}: 涨跌幅异常({pct}%)，跳过")
-                    continue
-                results[name] = {
-                    "name": name,
-                    "price": float(d.get("f43", 0)),
-                    "change_pct": pct,
-                    "change": float(d.get("f169", 0)),
-                }
-                print(f"  ✓ 板块 {name}: {pct:+.2f}%")
-        except Exception as e:
-            print(f"  ✗ 板块 {name}获取失败: {e}")
+    # 获取行业板块涨幅排行（m:90+t:2 = 行业板块）
+    url = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:2"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            name = item.get("f14", "")
+            pct = float(item.get("f3", 0))
+            if not _is_valid_pct(pct):
+                print(f"  ⚠ 板块 {name}: 涨跌幅异常({pct}%)，跳过")
+                continue
+            results[name] = {
+                "name": name,
+                "price": float(item.get("f2", 0)),
+                "change_pct": pct,
+                "change": float(item.get("f4", 0)),
+            }
+        print(f"  ✓ 行业板块排行: 获取到 {len(results)} 个（动态）")
+    except Exception as e:
+        print(f"  ✗ 行业板块排行获取失败: {e}")
 
     return results
 
