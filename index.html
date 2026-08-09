@@ -121,6 +121,36 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .hidden { display: none !important; }
+
+/* 搜索建议 */
+.search-wrap { position: relative; }
+.search-input {
+    width: 100%; padding: 12px 14px; border: 1.5px solid #e0e0e0;
+    border-radius: 10px; font-size: 16px; outline: none;
+    transition: border-color 0.2s;
+}
+.search-input:focus { border-color: #667eea; }
+.search-input::placeholder { color: #bbb; }
+.suggestions {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: #fff; border-radius: 0 0 10px 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 100;
+    max-height: 240px; overflow-y: auto; display: none;
+}
+.suggestions.show { display: block; }
+.sug-item {
+    display: flex; align-items: center; padding: 12px 14px;
+    border-bottom: 1px solid #f5f5f5; cursor: pointer;
+    transition: background 0.15s;
+}
+.sug-item:active { background: #f0f2f5; }
+.sug-name { font-size: 15px; font-weight: 500; }
+.sug-code { font-size: 12px; color: #999; margin-left: 8px; }
+.sug-market {
+    font-size: 11px; color: #fff; background: #667eea;
+    padding: 1px 6px; border-radius: 4px; margin-left: auto;
+}
+.sug-loading { padding: 16px; text-align: center; color: #999; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -142,13 +172,14 @@ body {
         <div class="token-status" id="tokenStatus"></div>
     </div>
 
-    <!-- 添加表单 -->
+    <!-- 搜索添加 -->
     <div class="add-card hidden" id="addCard">
-        <h3>添加股票</h3>
-        <div class="form-row">
-            <input type="text" id="stockName" placeholder="股票名称（如：贵州茅台）">
-            <input type="text" id="stockCode" placeholder="代码（如：600519）">
-            <button class="btn-add" onclick="addStock()" id="btnAdd">添加</button>
+        <h3>搜索添加股票</h3>
+        <div class="search-wrap">
+            <input type="text" class="search-input" id="searchInput"
+                   placeholder="输入股票名称或代码（如：茅台 / 600519）"
+                   autocomplete="off">
+            <div class="suggestions" id="suggestions"></div>
         </div>
     </div>
 
@@ -332,31 +363,69 @@ function renderList() {
     $('stockList').innerHTML = html;
 }
 
-async function addStock() {
-    const name = $('stockName').value.trim();
-    const code = $('stockCode').value.trim();
-    if (!name || !code) { showToast('请填写名称和代码', 'error'); return; }
+// ============================================================
+// 搜索股票（东方财富 API）
+// ============================================================
+let searchTimer = null;
 
-    $('btnAdd').disabled = true;
-    $('btnAdd').textContent = '...';
-    updateSync('loading');
+async function searchStock(query) {
+    if (!query || query.length < 1) {
+        $('suggestions').classList.remove('show');
+        return;
+    }
+    $('suggestions').innerHTML = '<div class="sug-loading">搜索中...</div>';
+    $('suggestions').classList.add('show');
 
     try {
-        const secid = autoMarket(code);
-        if (watchlist[name]) throw new Error(name + ' 已在自选中');
+        const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(query)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=8`;
+        const r = await fetch(url);
+        const data = await r.json();
+        const results = data.QuotationCodeTable?.Data || [];
+
+        if (results.length === 0) {
+            $('suggestions').innerHTML = '<div class="sug-loading">未找到匹配股票</div>';
+            return;
+        }
+
+        let html = '';
+        for (const item of results) {
+            // 只保留 A 股（Market=0 深圳, Market=1 上海）
+            if (item.Market !== 0 && item.Market !== 1) continue;
+            const marketLabel = item.Market === 1 ? '沪' : '深';
+            html += `<div class="sug-item" onclick="pickStock('${item.Name}','${item.Code}',${item.Market})">
+                <span class="sug-name">${item.Name}</span>
+                <span class="sug-code">${item.Code}</span>
+                <span class="sug-market">${marketLabel}</span>
+            </div>`;
+        }
+        if (!html) html = '<div class="sug-loading">未找到 A 股匹配</div>';
+        $('suggestions').innerHTML = html;
+    } catch (e) {
+        $('suggestions').innerHTML = '<div class="sug-loading">搜索失败，请检查网络</div>';
+    }
+}
+
+async function pickStock(name, code, market) {
+    $('suggestions').classList.remove('show');
+    $('searchInput').value = '';
+
+    if (watchlist[name]) {
+        showToast(name + ' 已在自选中', 'error');
+        return;
+    }
+
+    updateSync('loading');
+    try {
+        const secid = market + '.' + code;
         watchlist[name] = secid;
         await ghPut(watchlist);
         showToast('✓ 已添加 ' + name, 'success');
-        $('stockName').value = '';
-        $('stockCode').value = '';
         renderList();
         updateSync('ok');
     } catch (e) {
         showToast(e.message || '添加失败', 'error');
         updateSync('off');
     }
-    $('btnAdd').disabled = false;
-    $('btnAdd').textContent = '添加';
 }
 
 async function removeStock(name) {
@@ -386,9 +455,16 @@ function showMain() {
     loadWatchlist();
 }
 
-// 回车键
-$('stockCode').addEventListener('keydown', e => { if (e.key === 'Enter') addStock(); });
-$('stockName').addEventListener('keydown', e => { if (e.key === 'Enter') $('stockCode').focus(); });
+// 搜索框事件
+$('searchInput').addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    const q = e.target.value.trim();
+    if (!q) { $('suggestions').classList.remove('show'); return; }
+    searchTimer = setTimeout(() => searchStock(q), 300);
+});
+$('searchInput').addEventListener('blur', () => {
+    setTimeout(() => $('suggestions').classList.remove('show'), 200);
+});
 $('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveToken(); });
 
 // 启动：检查是否已有 token
