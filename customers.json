@@ -5,11 +5,7 @@
       "name": "管理员",
       "password": "760965825su",
       "email": "972548750@qq.com",
-      "watchlist": {
-        "宁德时代": "0.300750",
-        "比亚迪": "0.002594",
-        "长鑫科技": "1.688825"
-      },
+      "watchlist": {},
       "wecom_webhook": "",
       "feishu_webhook": "",
       "enabled": true
