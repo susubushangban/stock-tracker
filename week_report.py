@@ -76,18 +76,7 @@ ASIA_WEEKLY = {
 # A股板块（东方财富）
 # 已改为动态获取：fetch_a_sectors_snapshot() 自动从东方财富获取当日行业板块排行 TOP10
 # 不再需要硬编码列表
-
-# A股板块对应的行业ETF（yfinance可获取历史数据）
-SECTOR_ETFS_WEEKLY = {
-    "半导体":   "512480.SS",
-    "芯片":     "159995.SZ",
-    "人工智能": "515070.SS",
-    "军工航天": "512660.SS",
-    "机器人":   "562500.SS",
-    "新能源":   "516160.SS",
-    "消费电子": "159732.SZ",
-    "创新药":   "159992.SZ",
-}
+# fetch_sector_weekly_data() 已改为动态获取 TOP 行业板块的周 K 线累计涨跌
 
 
 def _secid_to_yfinance(secid: str) -> str:
@@ -128,30 +117,63 @@ def fetch_watchlist_weekly() -> dict:
     return results
 
 
-def fetch_sector_weekly_data() -> dict:
-    """通过yfinance获取A股行业ETF本周累计涨跌"""
+def fetch_sector_weekly_data(top_n: int = 10) -> dict:
+    """动态获取 TOP 行业板块本周累计涨跌（东方财富周 K 线）"""
     results = {}
-    for name, code in SECTOR_ETFS_WEEKLY.items():
+    import urllib.request
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 1. 先获取当前行业板块排行 TOP N
+    url_rank = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:2"
+        f"&fields=f2,f3,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_rank, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        sectors = []
+        for item in data.get("data", {}).get("diff", []):
+            sectors.append({
+                "name": item.get("f14", ""),
+                "secid": item.get("f12", ""),
+            })
+    except Exception as e:
+        print(f"  ✗ 获取行业板块排行失败: {e}")
+        return results
+
+    # 2. 逐个获取周 K 线，计算本周累计涨跌
+    for s in sectors:
+        name = s["name"]
+        secid = s["secid"]
+        url_kline = (
+            f"http://push2his.eastmoney.com/api/qt/stock/kline/get?"
+            f"secid={secid}&fields1=f1,f2,f3,f4,f5,f6"
+            f"&fields2=f51,f52,f53,f54,f55,f56,f57"
+            f"&klt=102&fqt=1&lmt=3&end=20500101"
+        )
         try:
-            ticker = yf.Ticker(code)
-            hist = ticker.history(period="5d")
-            if len(hist) < 2:
+            req = urllib.request.Request(url_kline, headers=headers)
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            klines = data.get("data", {}).get("klines", [])
+            if len(klines) < 2:
                 continue
-
-            first_close = hist.iloc[0]["Close"]
-            last_close = hist.iloc[-1]["Close"]
-            week_change = last_close - first_close
-            week_change_pct = (week_change / first_close) * 100
-
+            # 取最近两周的收盘价
+            prev_close = float(klines[-2].split(",")[2])
+            last_close = float(klines[-1].split(",")[2])
+            week_change_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close > 0 else 0
             results[name] = {
                 "name": name,
-                "start": round(float(first_close), 2),
-                "end": round(float(last_close), 2),
-                "change_pct": round(float(week_change_pct), 2),
+                "start": round(prev_close, 2),
+                "end": round(last_close, 2),
+                "change_pct": round(week_change_pct, 2),
             }
-            print(f"  ✓ 板块ETF {name}: 周{results[name]['change_pct']:+.2f}%")
+            print(f"  ✓ 板块 {name}: 周{week_change_pct:+.2f}%")
         except Exception as e:
-            print(f"  ✗ 板块ETF {name}: {e}")
+            print(f"  ✗ 板块 {name} 周K线获取失败: {e}")
 
     return results
 
