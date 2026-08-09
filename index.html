@@ -458,27 +458,48 @@ function renderWatchlist() {
 async function addStock(name, code, market) {
     const cust = getActiveCustomer();
     if (!cust) { showToast('请先选择客户', 'error'); return; }
-    if (!cust.watchlist) cust.watchlist = {};
-    if (cust.watchlist[name]) { showToast(name + ' 已在自选中', 'error'); return; }
 
     $('suggestions').classList.remove('show');
     $('searchInput').value = '';
-    cust.watchlist[name] = market + '.' + code;
-    if (await saveCustomers()) {
-        showToast('✓ 已添加 ' + name, 'success');
-        renderCustomers();
-        renderWatchlist();
+
+    try {
+        // 重新读取最新数据（避免冲突）
+        const allData = await ghGet();
+        const latestCust = allData.customers.find(c => c.id === activeCustId);
+        if (!latestCust) throw new Error('客户不存在');
+        if (!latestCust.watchlist) latestCust.watchlist = {};
+        if (latestCust.watchlist[name]) {
+            showToast(name + ' 已在自选中', 'error');
+            return;
+        }
+        latestCust.watchlist[name] = market + '.' + code;
+        customers = allData.customers; // 更新本地缓存
+        if (await saveCustomers()) {
+            showToast('✓ 已添加 ' + name, 'success');
+            renderCustomers();
+            renderWatchlist();
+        }
+    } catch (e) {
+        showToast('添加失败: ' + e.message, 'error');
     }
 }
 
 async function removeStock(name) {
-    const cust = getActiveCustomer();
-    if (!cust || !confirm('确定删除 ' + name + '？')) return;
-    delete cust.watchlist[name];
-    if (await saveCustomers()) {
-        showToast('✓ 已删除 ' + name, 'success');
-        renderCustomers();
-        renderWatchlist();
+    if (!confirm('确定删除 ' + name + '？')) return;
+    try {
+        // 重新读取最新数据（避免冲突）
+        const allData = await ghGet();
+        const cust = allData.customers.find(c => c.id === activeCustId);
+        if (!cust) throw new Error('客户不存在');
+        delete cust.watchlist[name];
+        customers = allData.customers; // 更新本地缓存
+        if (await saveCustomers()) {
+            showToast('✓ 已删除 ' + name, 'success');
+            renderCustomers();
+            renderWatchlist();
+        }
+    } catch (e) {
+        showToast('删除失败: ' + e.message, 'error');
     }
 }
 
