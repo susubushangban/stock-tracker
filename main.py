@@ -115,6 +115,33 @@ def _parse_watchlist() -> dict:
 WATCHLIST = _parse_watchlist()
 
 
+def load_customers() -> list:
+    """加载多客户配置（customers.json），支持多客户模式"""
+    customers_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "customers.json")
+    if os.path.exists(customers_file):
+        try:
+            with open(customers_file, encoding="utf-8") as f:
+                data = json.load(f)
+            customers = data.get("customers", [])
+            enabled = [c for c in customers if c.get("enabled", True)]
+            if enabled:
+                print(f"[配置] 从 customers.json 加载 {len(enabled)} 个客户")
+                return enabled
+        except Exception as e:
+            print(f"[配置] customers.json 读取失败: {e}")
+    # 无 customers.json 时，回退单客户模式
+    print("[配置] 使用单客户模式（watchlist.json / Secrets）")
+    return [{
+        "id": "000",
+        "name": "默认用户",
+        "email": os.environ.get("EMAIL_TO", "972548750@qq.com"),
+        "watchlist": WATCHLIST,
+        "wecom_webhook": os.environ.get("WECOM_WEBHOOK_URL", ""),
+        "feishu_webhook": os.environ.get("FEISHU_WEBHOOK_URL", ""),
+        "enabled": True,
+    }]
+
+
 def _fix_api_scale(price: float, value: float) -> float:
     """自动校正东方财富API数据精度（价格>10万说明是分为单位，需÷100）"""
     if abs(price) > 100000:
@@ -472,11 +499,12 @@ def _stock_to_yfinance(secid: str) -> str:
     return secid
 
 
-def fetch_watchlist_data() -> dict:
+def fetch_watchlist_data(watchlist: dict = None) -> dict:
     """获取自选股/持仓个股实时行情（东方财富优先，失败则yfinance备用）"""
     import urllib.request
     results = {}
-    for name, code in WATCHLIST.items():
+    wl = watchlist if watchlist is not None else WATCHLIST
+    for name, code in wl.items():
         url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f44,f45,f46,f47,f57,f58,f169,f170"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -1114,8 +1142,9 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
     return html
 
 
-def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = None):
-    """发送 Webhook 通知（企业微信/飞书，需配置对应 Secrets）"""
+def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = None,
+               wecom_url: str = None, feishu_url: str = None):
+    """发送 Webhook 通知（企业微信/飞书，支持传入自定义 webhook URL）"""
     # ---- 构建推送摘要 ----
     lines = ["📊 今日市场摘要"]
     if a_share:
@@ -1134,11 +1163,11 @@ def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = N
     msg = "\n".join(lines)
 
     # ---- 企业微信机器人 ----
-    wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
-    if wecom_url:
+    wecom = wecom_url or os.environ.get("WECOM_WEBHOOK_URL", "")
+    if wecom:
         try:
             payload = {"msgtype": "text", "text": {"content": msg}}
-            r = _requests.post(wecom_url, json=payload, timeout=10)
+            r = _requests.post(wecom, json=payload, timeout=10)
             if r.status_code == 200 and r.json().get("errcode") == 0:
                 print("[企微通知] 发送成功 ✓")
             else:
@@ -1147,8 +1176,8 @@ def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = N
             print(f"[企微通知] 发送失败: {e}")
 
     # ---- 飞书机器人 ----
-    feishu_url = os.environ.get("FEISHU_WEBHOOK_URL", "")
-    if feishu_url:
+    feishu = feishu_url or os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if feishu:
         try:
             payload = {
                 "msg_type": "interactive",
@@ -1157,7 +1186,7 @@ def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = N
                     "elements": [{"tag": "markdown", "content": msg}]
                 }
             }
-            r = _requests.post(feishu_url, json=payload, timeout=10)
+            r = _requests.post(feishu, json=payload, timeout=10)
             if r.status_code == 200 and r.json().get("code", -1) == 0:
                 print("[飞书通知] 发送成功 ✓")
             else:
@@ -1166,11 +1195,12 @@ def send_webhook(a_share: dict, us_data: dict, asia_data: dict, ai_text: str = N
             print(f"[飞书通知] 发送失败: {e}")
 
 
-def send_email(html_content: str, subject: str):
+def send_email(html_content: str, subject: str, to_addr: str = None):
     """发送HTML邮件"""
+    recipient = to_addr or EMAIL_TO
     msg = MIMEMultipart("alternative")
     msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
+    msg["To"] = recipient
     msg["Subject"] = subject
 
     msg.attach(MIMEText(html_content, "html", "utf-8"))
@@ -1178,11 +1208,11 @@ def send_email(html_content: str, subject: str):
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=15)
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
+        server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
         server.quit()
-        print("[邮件] 发送成功 ✓")
+        print(f"[邮件] 发送至 {recipient} 成功 ✓")
     except Exception as e:
-        print(f"[邮件] 发送失败: {e}")
+        print(f"[邮件] 发送至 {recipient} 失败: {e}")
         raise
 
 
@@ -1199,6 +1229,16 @@ def main():
         date_str = (today - timedelta(days=1)).strftime("%Y年%m月%d日")
     elif weekday == 6:  # 周日
         date_str = (today - timedelta(days=2)).strftime("%Y年%m月%d日")
+
+    # ============================================================
+    # 加载客户列表
+    # ============================================================
+    customers = load_customers()
+    print(f"[客户] 共 {len(customers)} 个客户待处理")
+
+    # ============================================================
+    # 获取公共市场数据（所有客户共享，只获取一次）
+    # ============================================================
 
     # 1. 抓取A股指数数据（yfinance优先，从GitHub稳定；东方财富备用）
     print("[数据] 获取A股指数...")
@@ -1225,11 +1265,6 @@ def main():
     print("[数据] 获取概念板块排行...")
     concept_rank = fetch_concept_sector_ranking(6)
     print(f"  → 领涨{len(concept_rank.get('top', []))}个，领跌{len(concept_rank.get('bottom', []))}个")
-
-    # 2.7 获取自选股行情
-    print("[数据] 获取自选股行情...")
-    watchlist = fetch_watchlist_data()
-    print(f"  → 获取到 {len(watchlist)} 只自选股")
 
     # 2.8 获取市场新闻
     print("[数据] 获取市场新闻...")
@@ -1267,34 +1302,62 @@ def main():
             strategy_signals.append(sig)
             print(f"  ✓ {name}: {len(sig['signals'])}个信号")
 
-    # 6. 规则分析
+    # 6. 规则分析（公共部分）
     print("[分析] 执行规则分析...")
     rule_text = rule_analysis(a_share, a_share_sectors, us_data, asia_data, sectors, strategy_signals)
 
-    # 7. AI深度分析（如果配置了API Key）
-    ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors,
-                               top_movers, top_losers, concept_rank, watchlist, news,
-                               strategy_signals)
-    if ai_text:
-        print("[AI] DeepSeek分析完成")
-    else:
-        print("[AI] 未配置API Key，跳过AI分析")
+    # ============================================================
+    # 遍历每个客户，生成个性化报告并发送
+    # ============================================================
+    for idx, customer in enumerate(customers, 1):
+        cust_name = customer.get("name", f"客户{customer['id']}")
+        cust_email = customer.get("email", "")
+        cust_watchlist = customer.get("watchlist", {})
+        cust_wecom = customer.get("wecom_webhook", "")
+        cust_feishu = customer.get("feishu_webhook", "")
 
-    # 8. 生成HTML邮件
-    print("[报告] 生成报告...")
-    html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors, rule_text, ai_text,
-                                top_movers, top_losers, concept_rank, watchlist, news, strategy_signals)
+        print(f"\n{'='*50}")
+        print(f"[客户 {idx}/{len(customers)}] {cust_name} (ID: {customer['id']})")
+        print(f"{'='*50}")
 
-    # 9. 发送邮件
-    print("[邮件] 发送中...")
-    subject = f"📊 全球股市日报 - {date_str}"
-    send_email(html, subject)
+        # 7. 获取该客户的自选股行情
+        print(f"[自选] 获取 {cust_name} 的自选股行情...")
+        watchlist_data = fetch_watchlist_data(cust_watchlist) if cust_watchlist else {}
+        print(f"  → 获取到 {len(watchlist_data)} 只自选股")
 
-    # 10. Webhook 通知（企微/飞书）
-    print("[通知] 发送 Webhook 通知...")
-    send_webhook(a_share, us_data, asia_data, ai_text)
+        # 8. AI深度分析（包含该客户的自选股信息）
+        ai_text = ai_deep_analysis(a_share, a_share_sectors, us_data, asia_data, sectors,
+                                   top_movers, top_losers, concept_rank, watchlist_data, news,
+                                   strategy_signals)
+        if ai_text:
+            print(f"[AI] {cust_name} 的 DeepSeek 分析完成")
+        else:
+            print(f"[AI] {cust_name} 跳过AI分析")
 
-    print("[完成] 全部任务执行完毕 ✓")
+        # 9. 生成HTML邮件
+        print(f"[报告] 生成 {cust_name} 的报告...")
+        html = generate_html_report(date_str, a_share, a_share_sectors, us_data, asia_data, sectors,
+                                    rule_text, ai_text, top_movers, top_losers, concept_rank,
+                                    watchlist_data, news, strategy_signals)
+
+        # 10. 发送邮件
+        if cust_email:
+            print(f"[邮件] 发送至 {cust_email}...")
+            subject = f"📊 全球股市日报 - {date_str}"
+            try:
+                send_email(html, subject, to_addr=cust_email)
+            except Exception as e:
+                print(f"[邮件] 发送失败: {e}")
+        else:
+            print(f"[邮件] {cust_name} 未配置邮箱，跳过")
+
+        # 11. Webhook 通知
+        if cust_wecom or cust_feishu:
+            print(f"[通知] 发送 {cust_name} 的 Webhook 通知...")
+            send_webhook(a_share, us_data, asia_data, ai_text,
+                        wecom_url=cust_wecom, feishu_url=cust_feishu)
+
+    print(f"\n[完成] 共处理 {len(customers)} 个客户，全部任务执行完毕 ✓")
 
 
 if __name__ == "__main__":
