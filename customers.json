@@ -5,7 +5,9 @@
       "name": "管理员",
       "password": "760965825su",
       "email": "972548750@qq.com",
-      "watchlist": {},
+      "watchlist": {
+        "四方股份": "1.601126"
+      },
       "wecom_webhook": "",
       "feishu_webhook": "",
       "enabled": true
