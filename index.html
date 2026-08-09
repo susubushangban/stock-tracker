@@ -229,7 +229,7 @@ async function ghGet() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     fileSha = data.sha;
-    const content = atob(data.content);
+    const content = decodeURIComponent(escape(atob(data.content)));
     return JSON.parse(content);
 }
 
