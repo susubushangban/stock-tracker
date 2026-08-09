@@ -23,7 +23,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # ============================================================
-# 自选股（从 GitHub Secret 读取，和日报共用）
+# 自选股（优先 watchlist.json，回退 GitHub Secret）
 # ============================================================
 def _auto_market(code: str) -> str:
     code = code.strip()
@@ -34,6 +34,18 @@ def _auto_market(code: str) -> str:
     return code
 
 def _parse_watchlist() -> dict:
+    # 1. 优先从 watchlist.json 文件读取
+    wl_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+    if os.path.exists(wl_file):
+        try:
+            with open(wl_file, encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                print(f"[配置] 从 watchlist.json 加载自选股: {list(data.keys())}")
+                return data
+        except Exception as e:
+            print(f"[配置] watchlist.json 读取失败: {e}")
+    # 2. 回退到 WATCHLIST_CONFIG 环境变量
     config = os.environ.get("WATCHLIST_CONFIG", "")
     if config.strip():
         result = {}
@@ -44,6 +56,7 @@ def _parse_watchlist() -> dict:
                 result[name.strip()] = _auto_market(code)
         if result:
             return result
+    # 3. 默认列表
     return {
         "贵州茅台": "1.600519",
         "宁德时代": "0.300750",
