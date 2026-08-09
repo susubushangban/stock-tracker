@@ -122,8 +122,61 @@ def _fix_api_scale(price: float, value: float) -> float:
     return value
 
 
+# 热门个股列表（yfinance 备用源，用于东方财富失败时获取涨跌幅）
+POPULAR_STOCKS_YF = {
+    "贵州茅台": "600519.SS", "宁德时代": "300750.SZ", "比亚迪": "002594.SZ",
+    "招商银行": "600036.SS", "中国平安": "601318.SS", "隆基绿能": "601012.SS",
+    "药明康德": "603259.SS", "立讯精密": "002475.SZ", "美的集团": "000333.SZ",
+    "格力电器": "000651.SZ", "五粮液": "000858.SZ", "中国中免": "601888.SS",
+    "哈药股份": "600664.SS", "赣锋锂业": "002460.SZ", "紫光国微": "002049.SZ",
+    "中芯国际": "688981.SS", "海光信息": "688041.SS", "寒武纪": "688256.SS",
+    "科大讯飞": "002230.SZ", "三六零": "601360.SS", "东方财富": "300059.SZ",
+    "中信证券": "600030.SS", "海天味业": "603288.SS", "恒瑞医药": "600276.SS",
+    "长春高新": "000661.SZ", "迈瑞医疗": "300760.SZ", "片仔癀": "600436.SS",
+    "中国神华": "601088.SS", "兖矿能源": "600188.SS", "长江电力": "600900.SS",
+}
+
+
+def fetch_top_movers_yfinance(top_n: int = 8) -> tuple:
+    """通过 yfinance 获取热门个股涨跌幅（备用源）"""
+    gainers = []
+    losers = []
+    for name, code in POPULAR_STOCKS_YF.items():
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                continue
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2]
+            change = latest["Close"] - prev["Close"]
+            change_pct = (change / prev["Close"]) * 100
+            if not _is_valid_pct(change_pct):
+                continue
+            item = {
+                "name": name,
+                "code": code.split(".")[0],
+                "price": round(float(latest["Close"]), 2),
+                "change_pct": round(float(change_pct), 2),
+            }
+            if change_pct > 0:
+                gainers.append(item)
+            else:
+                losers.append(item)
+        except Exception:
+            pass
+    # 排序取前N
+    gainers.sort(key=lambda x: x["change_pct"], reverse=True)
+    losers.sort(key=lambda x: x["change_pct"])
+    gainers = gainers[:top_n]
+    losers = losers[:top_n]
+    if gainers or losers:
+        print(f"  ✓ [备用] 涨幅榜{len(gainers)}只，跌幅榜{len(losers)}只（yfinance）")
+    return gainers, losers
+
+
 def fetch_top_movers(top_n: int = 8) -> tuple:
-    """获取A股涨幅榜和跌幅榜前N个股（东方财富实时行情排行）"""
+    """获取A股涨幅榜和跌幅榜前N个股（东方财富优先，yfinance备用）"""
     import urllib.request
 
     top_gainers = []
@@ -185,6 +238,11 @@ def fetch_top_movers(top_n: int = 8) -> tuple:
     except Exception as e:
         print(f"  ✗ 跌幅榜获取失败: {e}")
 
+    # 东方财富失败时，切换 yfinance 备用源
+    if len(top_gainers) < 3 and len(top_losers) < 3:
+        print("  → 东方财富数据不足，切换 yfinance 备用源...")
+        top_gainers, top_losers = fetch_top_movers_yfinance(top_n)
+
     return top_gainers, top_losers
 
 
@@ -238,8 +296,60 @@ def fetch_concept_sector_ranking(top_n: int = 6) -> dict:
     return results
 
 
+# A股行业板块 ETF 映射（yfinance 备用源）
+SECTOR_ETFS_YF = {
+    "银行": "512800.SS",
+    "非银金融": "512070.SS",
+    "房地产": "150770.SZ",
+    "食品饮料": "515170.SS",
+    "医药生物": "512010.SS",
+    "电子": "159997.SZ",
+    "计算机": "512720.SS",
+    "电力设备": "159752.SZ",
+    "汽车": "516110.SS",
+    "机械设备": "516010.SS",
+    "有色金属": "512400.SS",
+    "钢铁": "515210.SS",
+    "煤炭": "515220.SS",
+    "石油石化": "159697.SZ",
+    "通信": "515880.SS",
+    "传媒": "512980.SS",
+}
+
+
+def fetch_a_share_sectors_yfinance() -> dict:
+    """通过 yfinance 获取 A 股行业板块涨跌（备用源，使用行业 ETF）"""
+    results = {}
+    for name, code in SECTOR_ETFS_YF.items():
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                continue
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2]
+            change = latest["Close"] - prev["Close"]
+            change_pct = (change / prev["Close"]) * 100
+            if not _is_valid_pct(change_pct):
+                continue
+            results[name] = {
+                "name": name,
+                "price": round(float(latest["Close"]), 3),
+                "change_pct": round(float(change_pct), 2),
+                "change": round(float(change), 3),
+            }
+        except Exception as e:
+            print(f"  ✗ [备用] {name}: {e}")
+    if results:
+        # 按涨跌幅排序，取前10
+        sorted_items = sorted(results.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        results = dict(sorted_items[:10])
+        print(f"  ✓ 行业板块排行: 获取到 {len(results)} 个（yfinance 备用源）")
+    return results
+
+
 def fetch_a_share_sectors(top_n: int = 10) -> dict:
-    """动态获取A股行业板块排行（东方财富API，自动发现当日热点）"""
+    """动态获取A股行业板块排行（东方财富API优先，yfinance备用）"""
     results = {}
     import urllib.request
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -270,6 +380,11 @@ def fetch_a_share_sectors(top_n: int = 10) -> dict:
         print(f"  ✓ 行业板块排行: 获取到 {len(results)} 个（动态）")
     except Exception as e:
         print(f"  ✗ 行业板块排行获取失败: {e}")
+
+    # 东方财富失败时，切换 yfinance 备用源
+    if len(results) < 3:
+        print("  → 东方财富数据不足，切换 yfinance 备用源...")
+        results = fetch_a_share_sectors_yfinance()
 
     return results
 
