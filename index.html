@@ -377,10 +377,27 @@ async function searchStock(query) {
     $('suggestions').classList.add('show');
 
     try {
-        const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(query)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=8`;
-        const r = await fetch(url);
-        const data = await r.json();
-        const results = data.QuotationCodeTable?.Data || [];
+        // 用 JSONP 绕过 CORS（东方财富 API 支持）
+        const results = await new Promise((resolve, reject) => {
+            const cbName = 'eastmoney_cb_' + Date.now();
+            const script = document.createElement('script');
+            const timer = setTimeout(() => {
+                cleanup();
+                reject(new Error('timeout'));
+            }, 5000);
+            function cleanup() {
+                clearTimeout(timer);
+                delete window[cbName];
+                if (script.parentNode) script.parentNode.removeChild(script);
+            }
+            window[cbName] = (data) => {
+                cleanup();
+                resolve(data.QuotationCodeTable?.Data || []);
+            };
+            script.src = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(query)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=8&cb=${cbName}`;
+            script.onerror = () => { cleanup(); reject(new Error('network')); };
+            document.head.appendChild(script);
+        });
 
         if (results.length === 0) {
             $('suggestions').innerHTML = '<div class="sug-loading">未找到匹配股票</div>';
