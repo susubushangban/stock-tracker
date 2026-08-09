@@ -82,6 +82,18 @@ def _auto_market(code: str) -> str:
     return code  # 已带前缀则原样返回
 
 def _parse_watchlist() -> dict:
+    # 1. 优先从 watchlist.json 文件读取（Web 管理面板维护）
+    wl_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+    if os.path.exists(wl_file):
+        try:
+            with open(wl_file, encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                print(f"[配置] 从 watchlist.json 加载自选股: {list(data.keys())}")
+                return data
+        except Exception as e:
+            print(f"[配置] watchlist.json 读取失败: {e}")
+    # 2. 回退到 WATCHLIST_CONFIG 环境变量（GitHub Secret）
     config = os.environ.get("WATCHLIST_CONFIG", "")
     if config.strip():
         result = {}
@@ -93,7 +105,7 @@ def _parse_watchlist() -> dict:
         if result:
             print(f"[配置] 从 Secrets 加载自选股: {list(result.keys())}")
             return result
-    # 默认列表（未配置 WATCHLIST_CONFIG 时使用）
+    # 3. 默认列表
     return {
         "贵州茅台": "1.600519",
         "宁德时代": "0.300750",
