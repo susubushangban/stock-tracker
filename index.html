@@ -406,10 +406,14 @@ async function searchStock(query) {
 
         let html = '';
         for (const item of results) {
-            // 只保留 A 股（Market=0 深圳, Market=1 上海）
-            if (item.Market !== 0 && item.Market !== 1) continue;
-            const marketLabel = item.Market === 1 ? '沪' : '深';
-            html += `<div class="sug-item" onclick="pickStock('${item.Name}','${item.Code}',${item.Market})">
+            // 只保留 A 股（Classify 字段区分类型）
+            if (item.Classify !== 'AStock') continue;
+            // QuoteID 已包含市场前缀（如 1.600519, 0.002594）
+            const secid = item.QuoteID || '';
+            if (!secid || !secid.match(/^[01]\.\d{6}$/)) continue;
+            const mkt = Number(secid.charAt(0));
+            const marketLabel = mkt === 1 ? '沪' : '深';
+            html += `<div class="sug-item" onclick="pickStock('${item.Name}','${item.Code}',${mkt})">
                 <span class="sug-name">${item.Name}</span>
                 <span class="sug-code">${item.Code}</span>
                 <span class="sug-market">${marketLabel}</span>
