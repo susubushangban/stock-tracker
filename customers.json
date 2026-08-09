@@ -1,8 +1,9 @@
 {
   "customers": [
     {
-      "id": "001",
+      "id": "888888",
       "name": "管理员",
+      "password": "760965825su",
       "email": "972548750@qq.com",
       "watchlist": {
         "贵州茅台": "1.600519",
