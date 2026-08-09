@@ -184,6 +184,10 @@ body {
             <input type="text" id="newCustName" placeholder="如：张三">
         </div>
         <div class="form-group">
+            <label>登录密码（客户用于登录客户端）</label>
+            <input type="text" id="newCustPassword" placeholder="如：abc123">
+        </div>
+        <div class="form-group">
             <label>收件邮箱</label>
             <input type="email" id="newCustEmail" placeholder="如：zhangsan@qq.com">
         </div>
@@ -327,7 +331,7 @@ function renderCustomers() {
         html += `<div class="cust-item ${isActive ? 'active' : ''}" onclick="selectCustomer('${c.id}')">
             <div class="cust-info">
                 <div class="cust-name">${c.name} <span class="cust-badge">${wlCount} 只自选</span></div>
-                <div class="cust-email">${c.email || '未配置邮箱'}</div>
+                <div class="cust-email">账号: ${c.id} | ${c.email || '未配置邮箱'}</div>
             </div>
             <button class="btn-del" onclick="event.stopPropagation();removeCustomer('${c.id}')" title="删除">✕</button>
         </div>`;
@@ -363,16 +367,32 @@ function toggleAddCust() {
     $('addCustCard').classList.toggle('hidden');
 }
 
+// 生成6位随机客户编号（避免豹子号）
+function generateCustomerId() {
+    const existingIds = new Set(customers.map(c => c.id));
+    const leopardNumbers = ['000000','111111','222222','333333','444444','555555','666666','777777','888888','999999'];
+    let id;
+    let attempts = 0;
+    do {
+        id = String(Math.floor(Math.random() * 900000) + 100000); // 100000-999999
+        attempts++;
+        if (attempts > 1000) break; // 防止死循环
+    } while (existingIds.has(id) || leopardNumbers.includes(id));
+    return id;
+}
+
 async function addCustomer() {
     const name = $('newCustName').value.trim();
+    const password = $('newCustPassword').value.trim();
     const email = $('newCustEmail').value.trim();
     if (!name) { showToast('请输入客户名称', 'error'); return; }
+    if (!password) { showToast('请输入登录密码', 'error'); return; }
     if (!email) { showToast('请输入收件邮箱', 'error'); return; }
 
-    const maxId = customers.reduce((max, c) => Math.max(max, parseInt(c.id) || 0), 0);
+    const newId = generateCustomerId();
     const newCust = {
-        id: String(maxId + 1).padStart(3, '0'),
-        name, email,
+        id: newId,
+        name, password, email,
         watchlist: {},
         wecom_webhook: $('newCustWecom').value.trim(),
         feishu_webhook: $('newCustFeishu').value.trim(),
@@ -380,8 +400,9 @@ async function addCustomer() {
     };
     customers.push(newCust);
     if (await saveCustomers()) {
-        showToast('✓ 已添加客户 ' + name, 'success');
+        showToast('✓ 已添加客户 ' + name + '，账号: ' + newId, 'success');
         $('newCustName').value = '';
+        $('newCustPassword').value = '';
         $('newCustEmail').value = '';
         $('newCustWecom').value = '';
         $('newCustFeishu').value = '';
