@@ -129,19 +129,29 @@ body {
 </div>
 
 <div class="container">
-    <!-- 连接面板（输入客户编号） -->
+    <!-- 连接面板（输入客户编号+密码） -->
     <div class="card connect-card" id="connectCard">
         <div style="padding:20px 0;">
             <div style="font-size:40px;margin-bottom:12px;">🔑</div>
-            <h3 style="font-size:16px;color:#333;margin-bottom:6px;">输入您的客户编号</h3>
-            <p style="font-size:13px;color:#999;margin-bottom:16px;">由管理员分配，如：001、002</p>
-            <input type="text" id="custIdInput" placeholder="请输入客户编号" maxlength="10" style="text-align:center;">
-            <button class="btn-connect" onclick="connectCustomer()">进入</button>
+            <h3 style="font-size:16px;color:#333;margin-bottom:6px;">登录您的账户</h3>
+            <p style="font-size:13px;color:#999;margin-bottom:16px;">输入管理员分配的账号和密码</p>
+            <input type="text" id="custIdInput" placeholder="客户编号（6位数字）" maxlength="6" style="text-align:center;margin-bottom:10px;">
+            <input type="password" id="custPwdInput" placeholder="登录密码" style="text-align:center;margin-bottom:12px;">
+            <button class="btn-connect" onclick="connectCustomer()">登录</button>
         </div>
     </div>
 
     <!-- 主内容区 -->
     <div class="hidden" id="mainArea">
+        <!-- 账户设置 -->
+        <div class="card">
+            <div class="card-title">📧 接收邮箱 <span style="font-size:12px;color:#999;font-weight:normal;">（接收日报/周报）</span></div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <input type="email" id="emailInput" placeholder="输入接收邮箱" style="flex:1;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none;">
+                <button onclick="updateEmail()" style="padding:10px 16px;background:#11998e;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">保存</button>
+            </div>
+        </div>
+
         <!-- 搜索添加 -->
         <div class="card">
             <div class="card-title">添加股票</div>
@@ -164,7 +174,7 @@ body {
 
         <!-- 退出 -->
         <div style="text-align:center;padding:8px;">
-            <span style="color:#999;font-size:13px;cursor:pointer;" onclick="disconnect()">切换客户编号</span>
+            <span style="color:#999;font-size:13px;cursor:pointer;" onclick="disconnect()">退出登录</span>
         </div>
     </div>
 </div>
@@ -229,14 +239,14 @@ async function ghPut(allData) {
 // ============================================================
 async function connectCustomer() {
     const id = $('custIdInput').value.trim();
+    const pwd = $('custPwdInput').value.trim();
     if (!id) { showToast('请输入客户编号', 'error'); return; }
+    if (!pwd) { showToast('请输入登录密码', 'error'); return; }
 
-    // 需要 GitHub token（管理员提供给客户，或系统内置只读 token）
+    // 需要 GitHub token（管理员提供）
     if (!ghToken) {
-        // 尝试使用内置的只读 token（管理员可配置）
         ghToken = localStorage.getItem('gh_token_customer') || '';
         if (!ghToken) {
-            // 弹出 token 输入
             const t = prompt('请输入访问令牌（管理员提供）：');
             if (!t) { showToast('需要访问令牌', 'error'); return; }
             ghToken = t.trim();
@@ -252,6 +262,11 @@ async function connectCustomer() {
             showToast('未找到该客户编号，请检查后重试', 'error');
             return;
         }
+        // 验证密码
+        if (cust.password !== pwd) {
+            showToast('密码错误，请重试', 'error');
+            return;
+        }
         myCustId = id;
         myCustomer = cust;
         localStorage.setItem('cust_id', id);
@@ -262,7 +277,7 @@ async function connectCustomer() {
 }
 
 function disconnect() {
-    if (!confirm('确定要切换客户编号？')) return;
+    if (!confirm('确定要退出登录？')) return;
     localStorage.removeItem('cust_id');
     myCustId = '';
     myCustomer = null;
@@ -270,13 +285,38 @@ function disconnect() {
     $('mainArea').classList.add('hidden');
     $('headerName').textContent = '';
     $('custIdInput').value = '';
+    $('custPwdInput').value = '';
 }
 
 function showMainArea() {
     $('connectCard').classList.add('hidden');
     $('mainArea').classList.remove('hidden');
     $('headerName').textContent = '👤 ' + myCustomer.name;
+    $('emailInput').value = myCustomer.email || '';
     renderWatchlist();
+}
+
+// ============================================================
+// 修改邮箱
+// ============================================================
+async function updateEmail() {
+    const newEmail = $('emailInput').value.trim();
+    if (!newEmail) { showToast('请输入邮箱地址', 'error'); return; }
+    if (!newEmail.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+        showToast('邮箱格式不正确', 'error');
+        return;
+    }
+    try {
+        const allData = await ghGet();
+        const cust = allData.customers.find(c => c.id === myCustId);
+        if (!cust) throw new Error('客户不存在');
+        cust.email = newEmail;
+        myCustomer = cust;
+        await ghPut(allData);
+        showToast('✓ 邮箱已更新', 'success');
+    } catch (e) {
+        showToast('更新失败: ' + e.message, 'error');
+    }
 }
 
 // ============================================================
@@ -395,14 +435,12 @@ $('searchInput').addEventListener('input', e => {
     searchTimer = setTimeout(() => searchStock(q), 300);
 });
 $('searchInput').addEventListener('blur', () => { setTimeout(() => $('suggestions').classList.remove('show'), 200); });
-$('custIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') connectCustomer(); });
+$('custIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('custPwdInput').focus(); });
+$('custPwdInput').addEventListener('keydown', e => { if (e.key === 'Enter') connectCustomer(); });
 
-// 自动连接（如果已有客户编号）
+// 自动填充客户编号（密码需要每次输入）
 if (myCustId) {
     $('custIdInput').value = myCustId;
-    if (ghToken) {
-        connectCustomer();
-    }
 }
 </script>
 </body>
