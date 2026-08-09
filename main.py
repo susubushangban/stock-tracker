@@ -505,8 +505,8 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
     results = {}
     wl = watchlist if watchlist is not None else WATCHLIST
     for name, code in wl.items():
-        # 使用更完整的字段：f48=成交额, f168=换手率, f50=量比
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f44,f45,f46,f47,f48,f50,f57,f58,f168,f169,f170,f171"
+        # 尝试使用带 ut 参数的 API 获取更完整的数据
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?ut=fa5fd1943c7b386f172d6893dbbd1d0c&invt=2&fltt=2&fields=f43,f44,f45,f46,f47,f48,f50,f57,f58,f84,f85,f168,f169,f170&secid={code}"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             resp = urllib.request.urlopen(req, timeout=10)
@@ -526,11 +526,19 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
                     amount_str = f"{amount/1e4:.2f}万"
                 else:
                     amount_str = f"{amount:.0f}"
-                # 换手率和量比（某些情况下可能返回 None 或 '-'）
+                # 换手率 (f168) 和量比 (f50)
                 turnover_raw = d.get("f168")
                 volume_ratio_raw = d.get("f50")
-                turnover = float(turnover_raw) if turnover_raw and turnover_raw != '-' else 0
-                volume_ratio = float(volume_ratio_raw) if volume_ratio_raw and volume_ratio_raw != '-' else 0
+                turnover = float(turnover_raw) if turnover_raw and str(turnover_raw) != '-' and str(turnover_raw) != '' else 0
+                volume_ratio = float(volume_ratio_raw) if volume_ratio_raw and str(volume_ratio_raw) != '-' and str(volume_ratio_raw) != '' else 0
+                # 如果换手率或量比为0，尝试用其他字段计算
+                if turnover == 0 and d.get("f84") and d.get("f85"):
+                    # f84=流通股本, f85=总股本, f47=成交量
+                    # 换手率 = 成交量 / 流通股本 * 100
+                    circ_shares = float(d.get("f84", 0))
+                    volume = float(d.get("f47", 0))
+                    if circ_shares > 0 and volume > 0:
+                        turnover = (volume / circ_shares) * 100
                 results[name] = {
                     "name": name,
                     "price": price,
