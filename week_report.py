@@ -228,9 +228,211 @@ def fetch_a_sectors_snapshot() -> dict:
     return results
 
 
+def fetch_concept_sector_ranking_weekly(top_n: int = 6) -> dict:
+    """获取A股概念板块涨幅榜和跌幅榜（东方财富API，和日报共用逻辑）"""
+    import urllib.request
+    results = {"top": [], "bottom": []}
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 概念板块涨幅榜
+    url_top = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:3"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_top, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            results["top"].append({
+                "name": item.get("f14", ""),
+                "change_pct": float(item.get("f3", 0)),
+            })
+        print(f"  ✓ 概念板块涨幅榜: {len(results['top'])} 个")
+    except Exception as e:
+        print(f"  ✗ 概念板块涨幅榜: {e}")
+
+    # 概念板块跌幅榜
+    url_bottom = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n}&po=0&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:90+t:3"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_bottom, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            results["bottom"].append({
+                "name": item.get("f14", ""),
+                "change_pct": float(item.get("f3", 0)),
+            })
+        print(f"  ✓ 概念板块跌幅榜: {len(results['bottom'])} 个")
+    except Exception as e:
+        print(f"  ✗ 概念板块跌幅榜: {e}")
+
+    return results
+
+
+def fetch_top_movers_weekly(top_n: int = 6) -> tuple:
+    """获取A股涨幅榜和跌幅榜（最近交易日数据，和日报共用逻辑）"""
+    import urllib.request
+    top_gainers = []
+    top_losers = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 涨幅榜
+    url_gainers = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n + 5}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:0+t:6,m:0+t:80"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_gainers, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            name = item.get("f14", "")
+            if "*ST" in name:
+                continue
+            top_gainers.append({
+                "name": name,
+                "code": item.get("f12", ""),
+                "price": float(item.get("f2", 0)),
+                "change_pct": float(item.get("f3", 0)),
+            })
+            if len(top_gainers) >= top_n:
+                break
+        print(f"  ✓ 涨幅榜: {len(top_gainers)} 只")
+    except Exception as e:
+        print(f"  ✗ 涨幅榜: {e}")
+
+    # 跌幅榜
+    url_losers = (
+        f"http://push2.eastmoney.com/api/qt/clist/get?"
+        f"pn=1&pz={top_n + 5}&po=0&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs=m:0+t:6,m:0+t:80"
+        f"&fields=f2,f3,f4,f12,f14"
+    )
+    try:
+        req = urllib.request.Request(url_losers, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("data", {}).get("diff", []):
+            name = item.get("f14", "")
+            if "*ST" in name:
+                continue
+            top_losers.append({
+                "name": name,
+                "code": item.get("f12", ""),
+                "price": float(item.get("f2", 0)),
+                "change_pct": float(item.get("f3", 0)),
+            })
+            if len(top_losers) >= top_n:
+                break
+        print(f"  ✓ 跌幅榜: {len(top_losers)} 只")
+    except Exception as e:
+        print(f"  ✗ 跌幅榜: {e}")
+
+    return top_gainers, top_losers
+
+
+def analyze_weekly_strategy(symbols: dict) -> list:
+    """基于周线数据计算技术指标（用yfinance日线重采样为周线）"""
+    results = []
+    for name, code in symbols.items():
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="1y")
+            if hist.empty or len(hist) < 20:
+                continue
+
+            # 日线重采样为周线
+            weekly = hist.resample("W").agg({
+                "Open": "first", "High": "max",
+                "Low": "min", "Close": "last",
+                "Volume": "sum",
+            }).dropna()
+
+            closes = weekly["Close"].tolist()
+            volumes = weekly["Volume"].tolist()
+            signals = []
+
+            def ma(data, n):
+                return sum(data[-n:]) / n if len(data) >= n else None
+
+            ma5, ma10, ma20 = ma(closes, 5), ma(closes, 10), ma(closes, 20)
+            if ma5 and ma10 and ma20:
+                if ma5 > ma10 > ma20:
+                    signals.append("📈 周线均线多头排列")
+                elif ma5 < ma10 < ma20:
+                    signals.append("📉 周线均线空头排列")
+                if closes[-1] > ma5 > ma10:
+                    signals.append("✅ 周线价格站上均线")
+                elif closes[-1] < ma5 < ma10:
+                    signals.append("⚠️ 周线价格跌破均线")
+
+            # MACD（周线）
+            if len(closes) >= 26:
+                e12 = sum(closes[-12:]) / 12
+                e26 = sum(closes[-26:]) / 26
+                dif = e12 - e26
+                e12_prev = sum(closes[-13:-1]) / 12
+                e26_prev = sum(closes[-27:-1]) / 26
+                dif_prev = e12_prev - e26_prev
+                dea = (dif + dif_prev) / 2
+                if dif > 0 and dif_prev <= 0:
+                    signals.append("🔴 周线MACD金叉")
+                elif dif < 0 and dif_prev >= 0:
+                    signals.append("🟢 周线MACD死叉")
+                elif dif > dea > 0:
+                    signals.append("📈 周线MACD多头")
+                elif dif < dea < 0:
+                    signals.append("📉 周线MACD空头")
+
+            # RSI（周线）
+            if len(closes) >= 15:
+                gains, losses = [], []
+                for i in range(-14, 0):
+                    diff = closes[i] - closes[i - 1]
+                    gains.append(max(0, diff))
+                    losses.append(max(0, -diff))
+                avg_gain = sum(gains) / 14
+                avg_loss = sum(losses) / 14
+                rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+                if rsi > 70:
+                    signals.append(f"⚠️ 周RSI超买({rsi:.0f})")
+                elif rsi < 30:
+                    signals.append(f"✅ 周RSI超卖({rsi:.0f})")
+                else:
+                    signals.append(f"📊 周RSI中性({rsi:.0f})")
+
+            # 量能
+            if len(volumes) >= 6:
+                vol5 = sum(volumes[-5:]) / 5
+                vol_prev5 = sum(volumes[-10:-5]) / 5
+                if vol5 > vol_prev5 * 1.3:
+                    signals.append("📈 周线明显放量")
+                elif vol5 < vol_prev5 * 0.7:
+                    signals.append("📉 周线明显缩量")
+
+            if signals:
+                results.append({"name": name, "signals": signals})
+                print(f"  ✓ {name}: {len(signals)} 个信号")
+        except Exception as e:
+            print(f"  ✗ {name}技术分析失败: {e}")
+
+    return results
+
+
 def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
                        a_sectors: dict, sector_weekly: dict, week_range: str,
-                       watchlist: dict = None) -> Optional[str]:
+                       watchlist: dict = None, concept_weekly: dict = None,
+                       top_movers: tuple = None) -> Optional[str]:
     """使用DeepSeek API生成下周展望分析"""
     if not DEEPSEEK_API_KEY:
         return None
@@ -250,6 +452,13 @@ def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
         }
         if watchlist:
             data_parts["自选股周表现"] = {k: f"{v['start']:.2f}→{v['end']:.2f}(周{v['change_pct']:+.2f}%)" for k, v in watchlist.items()}
+        if concept_weekly:
+            data_parts["概念板块涨幅TOP"] = [f"{c['name']}({c['change_pct']:+.2f}%)" for c in concept_weekly.get("top", [])]
+            data_parts["概念板块跌幅TOP"] = [f"{c['name']}({c['change_pct']:+.2f}%)" for c in concept_weekly.get("bottom", [])]
+        if top_movers:
+            gainers, losers = top_movers
+            data_parts["涨幅榜"] = [f"{g['name']}({g['change_pct']:+.2f}%)" for g in gainers[:5]]
+            data_parts["跌幅榜"] = [f"{l['name']}({l['change_pct']:+.2f}%)" for l in losers[:5]]
         data_summary = json.dumps(data_parts, ensure_ascii=False, indent=2)
 
         prompt = f"""你是资深股市分析师。以下是本周全球市场数据（JSON格式）：
@@ -279,7 +488,8 @@ def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
 
 def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
                               a_sectors: dict, week_range: str, sector_weekly: dict = None,
-                              watchlist: dict = None) -> str:
+                              watchlist: dict = None, concept_weekly: dict = None,
+                              top_movers: tuple = None, tech_signals: list = None) -> str:
     """生成周报分析文本"""
     lines = []
     lines.append(f"📅 本周交易区间：{week_range}")
@@ -348,9 +558,45 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
             lines.append(f"    ⚠️ {name}: {d['change_pct']:+.2f}%")
         lines.append("")
 
+    # 概念板块排行
+    if concept_weekly:
+        if concept_weekly.get("top"):
+            lines.append("【💡 概念板块领涨】")
+            for c in concept_weekly["top"]:
+                lines.append(f"  🔥 {c['name']}: {c['change_pct']:+.2f}%")
+            lines.append("")
+        if concept_weekly.get("bottom"):
+            lines.append("【💡 概念板块领跌】")
+            for c in concept_weekly["bottom"]:
+                lines.append(f"  ⚠️ {c['name']}: {c['change_pct']:+.2f}%")
+            lines.append("")
+
+    # 异动个股
+    if top_movers:
+        gainers, losers = top_movers
+        if gainers:
+            lines.append("【🚀 涨幅榜 TOP】")
+            for g in gainers:
+                lines.append(f"  🔴 {g['name']}: {g['change_pct']:+.2f}%（¥{g['price']:.2f}）")
+            lines.append("")
+        if losers:
+            lines.append("【📉 跌幅榜 TOP】")
+            for l in losers:
+                lines.append(f"  🟢 {l['name']}: {l['change_pct']:+.2f}%（¥{l['price']:.2f}）")
+            lines.append("")
+
+    # 周线技术信号
+    if tech_signals:
+        lines.append("【📊 周线技术信号】")
+        for t in tech_signals:
+            lines.append(f"  {t['name']}：")
+            for s in t["signals"]:
+                lines.append(f"    {s}")
+        lines.append("")
+
     # 下周展望（AI生成）
     lines.append("【🔮 下周展望】")
-    ai_outlook = ai_weekly_outlook(a_share, us_data, asia_data, a_sectors, sector_weekly, week_range, watchlist)
+    ai_outlook = ai_weekly_outlook(a_share, us_data, asia_data, a_sectors, sector_weekly, week_range, watchlist, concept_weekly, top_movers)
     if ai_outlook:
         lines.append(ai_outlook)
     else:
@@ -376,7 +622,9 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
 
 def generate_html_weekly(date_str: str, week_range: str, a_share: dict, us_data: dict,
                           asia_data: dict, a_sectors: dict, analysis: str,
-                          sector_weekly: dict = None, watchlist: dict = None) -> str:
+                          sector_weekly: dict = None, watchlist: dict = None,
+                          concept_weekly: dict = None, top_movers: tuple = None,
+                          tech_signals: list = None) -> str:
     """生成周报HTML邮件"""
     all_pct = []
     for d in list(a_share.values()) + list(us_data.values()):
@@ -516,6 +764,46 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 </div>"""
         html += "</div>"
 
+    # 概念板块排行
+    if concept_weekly and (concept_weekly.get("top") or concept_weekly.get("bottom")):
+        html += '<div class="card"><div class="section-title">💡 概念板块排行</div>'
+        if concept_weekly.get("top"):
+            html += '<div style="margin-bottom:8px;"><span style="font-size:12px;color:#888;">领涨概念</span></div>'
+            for c in concept_weekly["top"]:
+                html += f"""<div class="idx">
+  <span class="idx-name">🔥 {c['name']}</span>
+  <span class="idx-price"><span class="red">{c['change_pct']:+.2f}%</span></span>
+</div>"""
+        if concept_weekly.get("bottom"):
+            html += '<div style="margin:8px 0 4px;"><span style="font-size:12px;color:#888;">领跌概念</span></div>'
+            for c in concept_weekly["bottom"]:
+                html += f"""<div class="idx">
+  <span class="idx-name">⚠️ {c['name']}</span>
+  <span class="idx-price"><span class="green">{c['change_pct']:+.2f}%</span></span>
+</div>"""
+        html += "</div>"
+
+    # 异动个股（涨幅榜 + 跌幅榜）
+    if top_movers:
+        gainers, losers = top_movers
+        if gainers or losers:
+            html += '<div class="card"><div class="section-title">🚀 异动个股 · 涨跌幅排行</div>'
+            if gainers:
+                html += '<div style="margin-bottom:4px;"><span style="font-size:12px;color:#888;">涨幅榜 TOP</span></div>'
+                for g in gainers:
+                    html += f"""<div class="idx">
+  <span class="idx-name">🔴 {g['name']}</span>
+  <span class="idx-price">¥{g['price']:.2f} <span class="red">{g['change_pct']:+.2f}%</span></span>
+</div>"""
+            if losers:
+                html += '<div style="margin:8px 0 4px;"><span style="font-size:12px;color:#888;">跌幅榜 TOP</span></div>'
+                for l in losers:
+                    html += f"""<div class="idx">
+  <span class="idx-name">🟢 {l['name']}</span>
+  <span class="idx-price">¥{l['price']:.2f} <span class="green">{l['change_pct']:+.2f}%</span></span>
+</div>"""
+            html += "</div>"
+
     # 自选股周度回顾
     if watchlist:
         html += '<div class="card"><div class="section-title">💼 自选股 · 本周回顾</div>'
@@ -529,6 +817,15 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 <div class="idx" style="border:none;font-size:12px;color:#999;">
   <span>最高 {d['high']:.2f}</span><span>最低 {d['low']:.2f}</span>
 </div>"""
+        html += "</div>"
+
+    # 周线技术信号
+    if tech_signals:
+        html += '<div class="card"><div class="section-title">📊 周线技术信号</div>'
+        for t in tech_signals:
+            html += f'<div style="margin:6px 0;"><b>{t["name"]}</b></div>'
+            for s in t["signals"]:
+                html += f'<div style="padding:2px 0 2px 12px;font-size:13px;line-height:1.6;">{s}</div>'
         html += "</div>"
 
     # 分析
@@ -655,12 +952,32 @@ def main():
     watchlist = fetch_watchlist_weekly()
     print(f"  → 获取到 {len(watchlist)} 只自选股")
 
+    # 4.9 概念板块排行
+    print("[数据] 获取概念板块排行...")
+    concept_weekly = fetch_concept_sector_ranking_weekly()
+    print(f"  → 涨幅 {len(concept_weekly.get('top', []))} / 跌幅 {len(concept_weekly.get('bottom', []))}")
+
+    # 4.10 异动个股（涨幅榜/跌幅榜）
+    print("[数据] 获取异动个股排行...")
+    top_movers = fetch_top_movers_weekly()
+    print(f"  → 涨幅榜 {len(top_movers[0])} / 跌幅榜 {len(top_movers[1])}")
+
+    # 4.11 周线技术信号
+    print("[数据] 计算周线技术信号...")
+    tech_symbols = {**A_SHARE_WEEKLY}
+    for name, secid in list(WATCHLIST.items())[:3]:
+        tech_symbols[name] = _secid_to_yfinance(secid)
+    tech_signals = analyze_weekly_strategy(tech_symbols)
+    print(f"  → 获取到 {len(tech_signals)} 个标的信号")
+
     # 5. 生成分析
     print("[分析] 生成周报...")
-    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range, sector_weekly, watchlist)
+    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range,
+                                        sector_weekly, watchlist, concept_weekly, top_movers, tech_signals)
 
     # 6. HTML邮件
-    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis, sector_weekly, watchlist)
+    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis,
+                                sector_weekly, watchlist, concept_weekly, top_movers, tech_signals)
 
     # 7. 发送
     print("[邮件] 发送中...")
