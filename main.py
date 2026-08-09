@@ -505,7 +505,8 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
     results = {}
     wl = watchlist if watchlist is not None else WATCHLIST
     for name, code in wl.items():
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f44,f45,f46,f47,f57,f58,f169,f170"
+        # 增加字段：f48=成交额, f50=量比, f168=换手率
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f44,f45,f46,f47,f48,f50,f57,f58,f168,f169,f170"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             resp = urllib.request.urlopen(req, timeout=10)
@@ -517,6 +518,14 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
                 if price <= 0 or not _is_valid_pct(pct):
                     print(f"  ⚠ {name}: 东方财富数据异常(price={price}, pct={pct}%)，切换备用源")
                     raise ValueError(f"数据异常: pct={pct}")
+                # 成交额格式化（元转万元/亿元）
+                amount = float(d.get("f48", 0))
+                if amount >= 1e8:
+                    amount_str = f"{amount/1e8:.2f}亿"
+                elif amount >= 1e4:
+                    amount_str = f"{amount/1e4:.2f}万"
+                else:
+                    amount_str = f"{amount:.0f}"
                 results[name] = {
                     "name": name,
                     "price": price,
@@ -525,8 +534,11 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
                     "high": float(d.get("f44", 0)),
                     "low": float(d.get("f45", 0)),
                     "volume": str(d.get("f47", "")),
+                    "amount": amount_str,  # 成交额
+                    "turnover": float(d.get("f168", 0)),  # 换手率 %
+                    "volume_ratio": float(d.get("f50", 0)),  # 量比
                 }
-                print(f"  ✓ {name}: {price:.2f} ({pct:+.2f}%)")
+                print(f"  ✓ {name}: {price:.2f} ({pct:+.2f}%) 换手:{results[name]['turnover']:.2f}% 成交额:{amount_str} 量比:{results[name]['volume_ratio']:.2f}")
                 continue
         except Exception as e:
             print(f"  ↻ {name} 东方财富失败({e})，尝试yfinance...")
@@ -542,6 +554,15 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
             prev = hist.iloc[-2] if len(hist) >= 2 else latest
             change = latest["Close"] - prev["Close"]
             change_pct = (change / prev["Close"]) * 100
+            # 成交额计算（价格*成交量）
+            amount = latest["Close"] * latest.get("Volume", 0)
+            if amount >= 1e8:
+                amount_str = f"{amount/1e8:.2f}亿"
+            elif amount >= 1e4:
+                amount_str = f"{amount/1e4:.2f}万"
+            else:
+                amount_str = f"{amount:.0f}"
+            # yfinance 无法直接获取换手率和量比，用默认值
             results[name] = {
                 "name": name,
                 "price": round(float(latest["Close"]), 2),
@@ -550,6 +571,9 @@ def fetch_watchlist_data(watchlist: dict = None) -> dict:
                 "high": round(float(latest["High"]), 2),
                 "low": round(float(latest["Low"]), 2),
                 "volume": str(int(latest.get("Volume", 0))),
+                "amount": amount_str,  # 成交额
+                "turnover": 0,  # 换手率（yfinance无法获取）
+                "volume_ratio": 0,  # 量比（yfinance无法获取）
             }
             print(f"  ✓ [备用] {name}: {results[name]['price']:.2f} ({results[name]['change_pct']:+.2f}%)")
         except Exception as e2:
@@ -1072,8 +1096,25 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
         html += '<div class="card"><div class="section-title">💼 自选股持仓</div>'
         for name, d in watchlist.items():
             cls = "red" if d["change_pct"] > 0 else ("green" if d["change_pct"] < 0 else "gray")
-            html += f"""<div class="idx">
-  <span class="idx-name">{name}</span>
+            # 获取额外指标（兼容旧数据）
+            turnover = d.get("turnover", 0)
+            amount = d.get("amount", "-")
+            volume_ratio = d.get("volume_ratio", 0)
+            # 构建额外指标显示
+            extra_info = []
+            if turnover > 0:
+                extra_info.append(f'换手<span style="color:#8e44ad;">{turnover:.2f}%</span>')
+            if amount and amount != "-":
+                extra_info.append(f'成交额<span style="color:#2980b9;">{amount}</span>')
+            if volume_ratio > 0:
+                vr_color = "#e74c3c" if volume_ratio > 1.5 else ("#27ae60" if volume_ratio < 0.7 else "#666")
+                extra_info.append(f'量比<span style="color:{vr_color};">{volume_ratio:.2f}</span>')
+            extra_html = " | ".join(extra_info) if extra_info else ""
+            html += f"""<div class="idx" style="flex-wrap:wrap;">
+  <div style="flex:1;min-width:200px;">
+    <div><span class="idx-name">{name}</span></div>
+    <div style="font-size:11px;color:#888;margin-top:2px;">{extra_html}</div>
+  </div>
   <span class="idx-price"><b>{d['price']:.2f}</b> <span class="{cls}">{d['change_pct']:+.2f}%</span></span>
 </div>"""
         html += "</div>"
