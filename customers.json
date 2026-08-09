@@ -5,9 +5,7 @@
       "name": "管理员",
       "password": "760965825su",
       "email": "972548750@qq.com",
-      "watchlist": {
-        "比亚迪": "0.002594"
-      },
+      "watchlist": {},
       "wecom_webhook": "",
       "feishu_webhook": "",
       "enabled": true
