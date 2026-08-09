@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>我的自选股</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f5; color: #333; min-height: 100vh;
+}
+.header {
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    color: #fff; padding: 24px 16px 20px; text-align: center;
+}
+.header h1 { font-size: 22px; font-weight: 600; }
+.header p { font-size: 13px; opacity: 0.85; margin-top: 6px; }
+.header .cust-name { font-size: 16px; font-weight: 500; margin-top: 8px; opacity: 0.95; }
+.container { max-width: 500px; margin: 0 auto; padding: 16px; }
+
+/* 卡片 */
+.card {
+    background: #fff; border-radius: 14px; padding: 16px;
+    margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.card-title {
+    font-size: 15px; font-weight: 600; color: #2c3e50;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f0f0f0;
+}
+
+/* 搜索 */
+.search-wrap { position: relative; }
+.search-input {
+    width: 100%; padding: 13px 16px; border: 2px solid #e8e8e8;
+    border-radius: 12px; font-size: 16px; outline: none;
+    transition: border-color 0.2s;
+}
+.search-input:focus { border-color: #11998e; }
+.search-input::placeholder { color: #bbb; }
+.suggestions {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: #fff; border-radius: 0 0 12px 12px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.12); z-index: 100;
+    max-height: 260px; overflow-y: auto; display: none;
+}
+.suggestions.show { display: block; }
+.sug-item {
+    display: flex; align-items: center; padding: 14px 16px;
+    border-bottom: 1px solid #f5f5f5; cursor: pointer;
+}
+.sug-item:active { background: #f0faf7; }
+.sug-name { font-size: 15px; font-weight: 500; }
+.sug-code { font-size: 12px; color: #999; margin-left: 8px; }
+.sug-market {
+    font-size: 11px; color: #fff; background: #11998e;
+    padding: 2px 8px; border-radius: 4px; margin-left: auto;
+}
+.sug-loading { padding: 16px; text-align: center; color: #999; font-size: 13px; }
+
+/* 股票列表 */
+.stock-item {
+    display: flex; align-items: center; padding: 14px 0;
+    border-bottom: 1px solid #f5f5f5;
+}
+.stock-item:last-child { border-bottom: none; }
+.stock-info { flex: 1; }
+.stock-name { font-size: 16px; font-weight: 500; }
+.stock-code { font-size: 12px; color: #999; margin-top: 3px; }
+.btn-del {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: #fff5f5; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #e74c3c; transition: all 0.2s;
+}
+.btn-del:active { background: #e74c3c; color: #fff; }
+.empty { text-align: center; padding: 40px 16px; color: #aaa; font-size: 14px; line-height: 1.8; }
+.count-badge {
+    display: inline-block; background: #e8f8f5; color: #11998e;
+    font-size: 12px; padding: 2px 10px; border-radius: 12px;
+    font-weight: 600; margin-left: 8px;
+}
+
+/* Toast */
+.toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 12px 24px; border-radius: 24px;
+    font-size: 14px; z-index: 999; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none; max-width: 90%;
+}
+.toast.show { opacity: 1; }
+.toast.success { background: #27ae60; }
+.toast.error { background: #e74c3c; }
+
+/* 底部 */
+.footer {
+    text-align: center; padding: 20px 16px; color: #bbb; font-size: 11px;
+}
+.hidden { display: none !important; }
+.spinner {
+    display: inline-block; width: 20px; height: 20px;
+    border: 2.5px solid #e0e0e0; border-top-color: #11998e;
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 连接面板 */
+.connect-card { text-align: center; }
+.connect-card input {
+    width: 100%; padding: 14px 16px; border: 2px solid #e8e8e8;
+    border-radius: 12px; font-size: 16px; outline: none;
+    text-align: center; margin-bottom: 12px;
+}
+.connect-card input:focus { border-color: #11998e; }
+.btn-connect {
+    width: 100%; padding: 14px; background: linear-gradient(135deg, #11998e, #38ef7d);
+    color: #fff; border: none; border-radius: 12px; font-size: 16px;
+    font-weight: 600; cursor: pointer;
+}
+.btn-connect:active { opacity: 0.8; }
+</style>
+</head>
+<body>
+
+<div class="header" id="headerArea">
+    <h1>📈 我的自选股</h1>
+    <p>实时管理 · 自动同步</p>
+    <div class="cust-name" id="headerName"></div>
+</div>
+
+<div class="container">
+    <!-- 连接面板（输入客户编号） -->
+    <div class="card connect-card" id="connectCard">
+        <div style="padding:20px 0;">
+            <div style="font-size:40px;margin-bottom:12px;">🔑</div>
+            <h3 style="font-size:16px;color:#333;margin-bottom:6px;">输入您的客户编号</h3>
+            <p style="font-size:13px;color:#999;margin-bottom:16px;">由管理员分配，如：001、002</p>
+            <input type="text" id="custIdInput" placeholder="请输入客户编号" maxlength="10" style="text-align:center;">
+            <button class="btn-connect" onclick="connectCustomer()">进入</button>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="hidden" id="mainArea">
+        <!-- 搜索添加 -->
+        <div class="card">
+            <div class="card-title">添加股票</div>
+            <div class="search-wrap">
+                <input type="text" class="search-input" id="searchInput"
+                       placeholder="输入名称或代码搜索" autocomplete="off">
+                <div class="suggestions" id="suggestions"></div>
+            </div>
+        </div>
+
+        <!-- 自选股列表 -->
+        <div class="card">
+            <div class="card-title">
+                我的自选 <span class="count-badge" id="stockCount">0 只</span>
+            </div>
+            <div id="stockList">
+                <div class="empty"><div class="spinner"></div><br>加载中...</div>
+            </div>
+        </div>
+
+        <!-- 退出 -->
+        <div style="text-align:center;padding:8px;">
+            <span style="color:#999;font-size:13px;cursor:pointer;" onclick="disconnect()">切换客户编号</span>
+        </div>
+    </div>
+</div>
+
+<div class="footer">
+    股市追踪 · 每日自动推送日报
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const REPO = 'susubushangban/stock-tracker';
+const BRANCH = 'main';
+const FILE = 'customers.json';
+const API = `https://api.github.com/repos/${REPO}/contents/${FILE}`;
+
+let ghToken = localStorage.getItem('gh_token_customer') || '';
+let fileSha = '';
+let myCustomer = null;
+let myCustId = localStorage.getItem('cust_id') || '';
+
+const $ = id => document.getElementById(id);
+
+function showToast(msg, type) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (type || '');
+    setTimeout(() => t.className = 'toast', 2500);
+}
+
+// ============================================================
+// GitHub API（只读 + 写入）
+// ============================================================
+async function ghGet() {
+    const r = await fetch(API + '?ref=' + BRANCH, {
+        headers: { 'Authorization': 'token ' + ghToken, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    fileSha = data.sha;
+    return JSON.parse(decodeURIComponent(escape(atob(data.content))));
+}
+
+async function ghPut(allData) {
+    const body = {
+        message: `🔄 客户 ${myCustId} 更新自选股 (via Client Portal)`,
+        content: btoa(unescape(encodeURIComponent(JSON.stringify(allData, null, 2)))),
+        sha: fileSha, branch: BRANCH,
+    };
+    const r = await fetch(API, {
+        method: 'PUT',
+        headers: { 'Authorization': 'token ' + ghToken, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.message || 'HTTP ' + r.status); }
+    const res = await r.json();
+    fileSha = res.content.sha;
+}
+
+// ============================================================
+// 客户连接
+// ============================================================
+async function connectCustomer() {
+    const id = $('custIdInput').value.trim();
+    if (!id) { showToast('请输入客户编号', 'error'); return; }
+
+    // 需要 GitHub token（管理员提供给客户，或系统内置只读 token）
+    if (!ghToken) {
+        // 尝试使用内置的只读 token（管理员可配置）
+        ghToken = localStorage.getItem('gh_token_customer') || '';
+        if (!ghToken) {
+            // 弹出 token 输入
+            const t = prompt('请输入访问令牌（管理员提供）：');
+            if (!t) { showToast('需要访问令牌', 'error'); return; }
+            ghToken = t.trim();
+            localStorage.setItem('gh_token_customer', ghToken);
+        }
+    }
+
+    try {
+        const data = await ghGet();
+        const customers = data.customers || [];
+        const cust = customers.find(c => c.id === id);
+        if (!cust) {
+            showToast('未找到该客户编号，请检查后重试', 'error');
+            return;
+        }
+        myCustId = id;
+        myCustomer = cust;
+        localStorage.setItem('cust_id', id);
+        showMainArea();
+    } catch (e) {
+        showToast('连接失败: ' + e.message, 'error');
+    }
+}
+
+function disconnect() {
+    if (!confirm('确定要切换客户编号？')) return;
+    localStorage.removeItem('cust_id');
+    myCustId = '';
+    myCustomer = null;
+    $('connectCard').classList.remove('hidden');
+    $('mainArea').classList.add('hidden');
+    $('headerName').textContent = '';
+    $('custIdInput').value = '';
+}
+
+function showMainArea() {
+    $('connectCard').classList.add('hidden');
+    $('mainArea').classList.remove('hidden');
+    $('headerName').textContent = '👤 ' + myCustomer.name;
+    renderWatchlist();
+}
+
+// ============================================================
+// 自选股展示
+// ============================================================
+function renderWatchlist() {
+    const wl = myCustomer.watchlist || {};
+    const entries = Object.entries(wl);
+    $('stockCount').textContent = entries.length + ' 只';
+
+    if (entries.length === 0) {
+        $('stockList').innerHTML = '<div class="empty">📭 暂无自选股<br>在上方搜索添加</div>';
+        return;
+    }
+    let html = '';
+    for (const [name, code] of entries) {
+        const parts = code.split('.');
+        const label = parts[0] === '1' ? '沪' : '深';
+        html += `<div class="stock-item">
+            <div class="stock-info">
+                <div class="stock-name">${name}</div>
+                <div class="stock-code">${label} ${parts[1] || code}</div>
+            </div>
+            <button class="btn-del" onclick="removeStock('${name}')" title="删除">✕</button>
+        </div>`;
+    }
+    $('stockList').innerHTML = html;
+}
+
+async function addStock(name, code, market) {
+    if (!myCustomer.watchlist) myCustomer.watchlist = {};
+    if (myCustomer.watchlist[name]) { showToast(name + ' 已在自选中', 'error'); return; }
+
+    $('suggestions').classList.remove('show');
+    $('searchInput').value = '';
+
+    try {
+        // 重新读取最新数据（避免冲突）
+        const allData = await ghGet();
+        const cust = allData.customers.find(c => c.id === myCustId);
+        if (!cust) throw new Error('客户不存在');
+        if (!cust.watchlist) cust.watchlist = {};
+        cust.watchlist[name] = market + '.' + code;
+        myCustomer = cust;
+        await ghPut(allData);
+        showToast('✓ 已添加 ' + name, 'success');
+        renderWatchlist();
+    } catch (e) {
+        showToast('添加失败: ' + e.message, 'error');
+    }
+}
+
+async function removeStock(name) {
+    if (!confirm('确定删除 ' + name + '？')) return;
+    try {
+        const allData = await ghGet();
+        const cust = allData.customers.find(c => c.id === myCustId);
+        if (!cust) throw new Error('客户不存在');
+        delete cust.watchlist[name];
+        myCustomer = cust;
+        await ghPut(allData);
+        showToast('✓ 已删除 ' + name, 'success');
+        renderWatchlist();
+    } catch (e) {
+        showToast('删除失败: ' + e.message, 'error');
+    }
+}
+
+// ============================================================
+// 搜索（东方财富 JSONP）
+// ============================================================
+let searchTimer = null;
+async function searchStock(query) {
+    if (!query || query.length < 1) { $('suggestions').classList.remove('show'); return; }
+    $('suggestions').innerHTML = '<div class="sug-loading">搜索中...</div>';
+    $('suggestions').classList.add('show');
+    try {
+        const results = await new Promise((resolve, reject) => {
+            const cbName = 'em_cb_' + Date.now();
+            const script = document.createElement('script');
+            const timer = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 5000);
+            function cleanup() { clearTimeout(timer); delete window[cbName]; if (script.parentNode) script.parentNode.removeChild(script); }
+            window[cbName] = (data) => { cleanup(); resolve(data.QuotationCodeTable?.Data || []); };
+            script.src = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(query)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=8&cb=${cbName}`;
+            script.onerror = () => { cleanup(); reject(new Error('network')); };
+            document.head.appendChild(script);
+        });
+        if (results.length === 0) { $('suggestions').innerHTML = '<div class="sug-loading">未找到匹配股票</div>'; return; }
+        let html = '';
+        for (const item of results) {
+            if (item.Classify !== 'AStock') continue;
+            const secid = item.QuoteID || '';
+            if (!secid || !secid.match(/^[01]\.\d{6}$/)) continue;
+            const mkt = Number(secid.charAt(0));
+            const label = mkt === 1 ? '沪' : '深';
+            html += `<div class="sug-item" onclick="addStock('${item.Name}','${item.Code}',${mkt})">
+                <span class="sug-name">${item.Name}</span>
+                <span class="sug-code">${item.Code}</span>
+                <span class="sug-market">${label}</span>
+            </div>`;
+        }
+        if (!html) html = '<div class="sug-loading">未找到 A 股匹配</div>';
+        $('suggestions').innerHTML = html;
+    } catch (e) {
+        $('suggestions').innerHTML = '<div class="sug-loading">搜索失败</div>';
+    }
+}
+
+// ============================================================
+// 事件绑定 & 初始化
+// ============================================================
+$('searchInput').addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    const q = e.target.value.trim();
+    if (!q) { $('suggestions').classList.remove('show'); return; }
+    searchTimer = setTimeout(() => searchStock(q), 300);
+});
+$('searchInput').addEventListener('blur', () => { setTimeout(() => $('suggestions').classList.remove('show'), 200); });
+$('custIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') connectCustomer(); });
+
+// 自动连接（如果已有客户编号）
+if (myCustId) {
+    $('custIdInput').value = myCustId;
+    if (ghToken) {
+        connectCustomer();
+    }
+}
+</script>
+</body>
+</html>
