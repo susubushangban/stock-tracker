@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>自选股管理</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f5; color: #333; min-height: 100vh;
+}
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff; padding: 20px 16px 16px; text-align: center;
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header p { font-size: 12px; opacity: 0.8; margin-top: 4px; }
+.container { max-width: 500px; margin: 0 auto; padding: 16px; }
+
+/* Token 设置面板 */
+.token-card {
+    background: #fff; border-radius: 12px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.token-card h3 { font-size: 14px; color: #666; margin-bottom: 8px; }
+.token-card p { font-size: 12px; color: #999; margin-bottom: 10px; line-height: 1.5; }
+.token-input-row { display: flex; gap: 8px; }
+.token-input-row input {
+    flex: 1; padding: 10px 12px; border: 1.5px solid #e0e0e0;
+    border-radius: 8px; font-size: 13px; outline: none; font-family: monospace;
+}
+.token-input-row input:focus { border-color: #667eea; }
+.btn-save {
+    padding: 10px 16px; background: #667eea; color: #fff; border: none;
+    border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.token-status {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    font-size: 12px; color: #27ae60;
+}
+.token-status.err { color: #e74c3c; }
+
+/* 添加表单 */
+.add-card {
+    background: #fff; border-radius: 12px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.add-card h3 { font-size: 14px; color: #666; margin-bottom: 12px; }
+.form-row { display: flex; gap: 8px; }
+.form-row input {
+    flex: 1; padding: 10px 12px; border: 1.5px solid #e0e0e0;
+    border-radius: 8px; font-size: 15px; outline: none;
+    transition: border-color 0.2s;
+}
+.form-row input:focus { border-color: #667eea; }
+.form-row input::placeholder { color: #bbb; }
+.btn-add {
+    padding: 10px 20px; background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff; border: none; border-radius: 8px; font-size: 15px;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+    transition: opacity 0.2s;
+}
+.btn-add:active { opacity: 0.7; }
+.btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 自选股列表 */
+.list-card {
+    background: #fff; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.list-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 16px; border-bottom: 1px solid #f0f0f0;
+}
+.list-header h3 { font-size: 14px; color: #666; }
+.list-header .count { font-size: 12px; color: #999; }
+.stock-item {
+    display: flex; align-items: center; padding: 14px 16px;
+    border-bottom: 1px solid #f5f5f5; transition: background 0.15s;
+}
+.stock-item:active { background: #f9f9f9; }
+.stock-info { flex: 1; }
+.stock-name { font-size: 15px; font-weight: 500; }
+.stock-code { font-size: 12px; color: #999; margin-top: 2px; }
+.btn-del {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #fff0f0; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: #e74c3c; transition: all 0.2s;
+}
+.btn-del:active { background: #e74c3c; color: #fff; }
+.empty { text-align: center; padding: 40px 16px; color: #999; font-size: 14px; }
+
+/* Toast */
+.toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 10px 20px; border-radius: 20px;
+    font-size: 14px; z-index: 999; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none; max-width: 90%;
+}
+.toast.show { opacity: 1; }
+.toast.success { background: #27ae60; }
+.toast.error { background: #e74c3c; }
+
+/* 同步状态 */
+.sync-bar {
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px; padding: 12px 8px; font-size: 12px; color: #999;
+}
+.sync-dot { width: 6px; height: 6px; border-radius: 50%; background: #27ae60; }
+.sync-dot.off { background: #e74c3c; }
+.sync-dot.loading { background: #f39c12; animation: pulse 0.8s infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+.spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid #ddd; border-top-color: #667eea;
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>📊 自选股管理</h1>
+    <p>修改后自动同步到云端</p>
+</div>
+
+<div class="container">
+    <!-- Token 配置区 -->
+    <div class="token-card" id="tokenCard">
+        <h3>🔑 GitHub 连接</h3>
+        <p>输入 GitHub Personal Access Token（仅需首次配置，保存在本地浏览器）</p>
+        <div class="token-input-row">
+            <input type="password" id="tokenInput" placeholder="ghp_xxxx...">
+            <button class="btn-save" onclick="saveToken()">连接</button>
+        </div>
+        <div class="token-status" id="tokenStatus"></div>
+    </div>
+
+    <!-- 添加表单 -->
+    <div class="add-card hidden" id="addCard">
+        <h3>添加股票</h3>
+        <div class="form-row">
+            <input type="text" id="stockName" placeholder="股票名称（如：贵州茅台）">
+            <input type="text" id="stockCode" placeholder="代码（如：600519）">
+            <button class="btn-add" onclick="addStock()" id="btnAdd">添加</button>
+        </div>
+    </div>
+
+    <!-- 自选股列表 -->
+    <div class="list-card hidden" id="listCard">
+        <div class="list-header">
+            <h3>当前自选</h3>
+            <span class="count" id="stockCount">-</span>
+        </div>
+        <div id="stockList">
+            <div class="empty"><div class="spinner"></div><br>加载中...</div>
+        </div>
+    </div>
+
+    <!-- 同步状态 -->
+    <div class="sync-bar hidden" id="syncBar">
+        <span class="sync-dot" id="syncDot"></span>
+        <span id="syncText">已同步</span>
+        <span style="margin-left:12px;cursor:pointer;color:#667eea;" onclick="resetToken()">重设 Token</span>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// 配置
+// ============================================================
+const REPO = 'susubushangban/stock-tracker';
+const BRANCH = 'main';
+const FILE = 'watchlist.json';
+const API = `https://api.github.com/repos/${REPO}/contents/${FILE}`;
+
+let ghToken = localStorage.getItem('gh_token') || '';
+let fileSha = '';  // 当前文件的 sha，用于更新
+
+// ============================================================
+// 工具函数
+// ============================================================
+const $ = id => document.getElementById(id);
+
+function showToast(msg, type) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (type || '');
+    setTimeout(() => t.className = 'toast', 2500);
+}
+
+function autoMarket(code) {
+    code = code.trim();
+    if (code.startsWith('6')) return '1.' + code;
+    if (code.startsWith('0') || code.startsWith('3')) return '0.' + code;
+    return code;
+}
+
+function updateSync(status) {
+    const dot = $('syncDot');
+    const txt = $('syncText');
+    if (status === 'loading') {
+        dot.className = 'sync-dot loading';
+        txt.textContent = '同步中...';
+    } else if (status === 'ok') {
+        dot.className = 'sync-dot';
+        txt.textContent = '已同步到云端';
+    } else {
+        dot.className = 'sync-dot off';
+        txt.textContent = '同步失败（本地已更新）';
+    }
+}
+
+// ============================================================
+// GitHub API
+// ============================================================
+async function ghGet() {
+    const r = await fetch(API + '?ref=' + BRANCH, {
+        headers: { 'Authorization': 'token ' + ghToken, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    fileSha = data.sha;
+    const content = atob(data.content);
+    return JSON.parse(content);
+}
+
+async function ghPut(watchlist) {
+    const body = {
+        message: '🔄 更新自选股 (via Web Manager)',
+        content: btoa(unescape(encodeURIComponent(JSON.stringify(watchlist, null, 2)))),
+        sha: fileSha,
+        branch: BRANCH,
+    };
+    const r = await fetch(API, {
+        method: 'PUT',
+        headers: {
+            'Authorization': 'token ' + ghToken,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || 'HTTP ' + r.status);
+    }
+    const data = await r.json();
+    fileSha = data.content.sha;
+    return true;
+}
+
+// ============================================================
+// Token 管理
+// ============================================================
+async function saveToken() {
+    const token = $('tokenInput').value.trim();
+    if (!token) { showToast('请输入 Token', 'error'); return; }
+    ghToken = token;
+    $('tokenStatus').innerHTML = '<div class="spinner"></div> 验证中...';
+    $('tokenStatus').className = 'token-status';
+    try {
+        await ghGet();
+        localStorage.setItem('gh_token', token);
+        $('tokenStatus').textContent = '✓ 连接成功';
+        $('tokenStatus').className = 'token-status';
+        setTimeout(showMain, 500);
+    } catch (e) {
+        $('tokenStatus').textContent = '✗ 连接失败: ' + e.message;
+        $('tokenStatus').className = 'token-status err';
+        ghToken = '';
+    }
+}
+
+function resetToken() {
+    if (!confirm('确定要重设 Token？')) return;
+    localStorage.removeItem('gh_token');
+    ghToken = '';
+    $('tokenCard').classList.remove('hidden');
+    $('addCard').classList.add('hidden');
+    $('listCard').classList.add('hidden');
+    $('syncBar').classList.add('hidden');
+    $('tokenInput').value = '';
+    $('tokenStatus').textContent = '';
+}
+
+// ============================================================
+// 自选股操作
+// ============================================================
+let watchlist = {};
+
+async function loadWatchlist() {
+    try {
+        watchlist = await ghGet();
+        renderList();
+    } catch (e) {
+        $('stockList').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function renderList() {
+    const entries = Object.entries(watchlist);
+    $('stockCount').textContent = entries.length + ' 只';
+
+    if (entries.length === 0) {
+        $('stockList').innerHTML = '<div class="empty">暂无自选股<br>在上方添加</div>';
+        return;
+    }
+
+    let html = '';
+    for (const [name, code] of entries) {
+        const parts = code.split('.');
+        const market = parts[0];
+        const pureCode = parts[1] || code;
+        const label = market === '1' ? '沪' : '深';
+        html += `<div class="stock-item">
+            <div class="stock-info">
+                <div class="stock-name">${name}</div>
+                <div class="stock-code">${label} ${pureCode}</div>
+            </div>
+            <button class="btn-del" onclick="removeStock('${name}')" title="删除">✕</button>
+        </div>`;
+    }
+    $('stockList').innerHTML = html;
+}
+
+async function addStock() {
+    const name = $('stockName').value.trim();
+    const code = $('stockCode').value.trim();
+    if (!name || !code) { showToast('请填写名称和代码', 'error'); return; }
+
+    $('btnAdd').disabled = true;
+    $('btnAdd').textContent = '...';
+    updateSync('loading');
+
+    try {
+        const secid = autoMarket(code);
+        if (watchlist[name]) throw new Error(name + ' 已在自选中');
+        watchlist[name] = secid;
+        await ghPut(watchlist);
+        showToast('✓ 已添加 ' + name, 'success');
+        $('stockName').value = '';
+        $('stockCode').value = '';
+        renderList();
+        updateSync('ok');
+    } catch (e) {
+        showToast(e.message || '添加失败', 'error');
+        updateSync('off');
+    }
+    $('btnAdd').disabled = false;
+    $('btnAdd').textContent = '添加';
+}
+
+async function removeStock(name) {
+    if (!confirm('确定删除 ' + name + '？')) return;
+    updateSync('loading');
+
+    try {
+        delete watchlist[name];
+        await ghPut(watchlist);
+        showToast('✓ 已删除 ' + name, 'success');
+        renderList();
+        updateSync('ok');
+    } catch (e) {
+        showToast(e.message || '删除失败', 'error');
+        updateSync('off');
+    }
+}
+
+// ============================================================
+// 页面初始化
+// ============================================================
+function showMain() {
+    $('tokenCard').classList.add('hidden');
+    $('addCard').classList.remove('hidden');
+    $('listCard').classList.remove('hidden');
+    $('syncBar').classList.remove('hidden');
+    loadWatchlist();
+}
+
+// 回车键
+$('stockCode').addEventListener('keydown', e => { if (e.key === 'Enter') addStock(); });
+$('stockName').addEventListener('keydown', e => { if (e.key === 'Enter') $('stockCode').focus(); });
+$('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveToken(); });
+
+// 启动：检查是否已有 token
+if (ghToken) {
+    $('tokenInput').value = ghToken;
+    // 静默验证 token
+    (async () => {
+        try {
+            await ghGet();
+            showMain();
+        } catch (e) {
+            $('tokenStatus').textContent = '✗ Token 已失效，请重新输入';
+            $('tokenStatus').className = 'token-status err';
+            localStorage.removeItem('gh_token');
+            ghToken = '';
+        }
+    })();
+}
+</script>
+</body>
+</html>
