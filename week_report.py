@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import yfinance as yf
+import requests as _requests
 
 # ============================================================
 # 配置
@@ -20,6 +21,36 @@ EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO = os.environ.get("EMAIL_TO", "972548750@qq.com")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# ============================================================
+# 自选股（从 GitHub Secret 读取，和日报共用）
+# ============================================================
+def _auto_market(code: str) -> str:
+    code = code.strip()
+    if code.startswith("6"):
+        return f"1.{code}"
+    elif code.startswith("0") or code.startswith("3"):
+        return f"0.{code}"
+    return code
+
+def _parse_watchlist() -> dict:
+    config = os.environ.get("WATCHLIST_CONFIG", "")
+    if config.strip():
+        result = {}
+        for item in config.split(","):
+            item = item.strip()
+            if ":" in item:
+                name, code = item.split(":", 1)
+                result[name.strip()] = _auto_market(code)
+        if result:
+            return result
+    return {
+        "贵州茅台": "1.600519",
+        "宁德时代": "0.300750",
+        "比亚迪":   "0.002594",
+    }
+
+WATCHLIST = _parse_watchlist()
 
 # ============================================================
 # 追踪标的（yfinance代码）
@@ -65,6 +96,44 @@ SECTOR_ETFS_WEEKLY = {
     "消费电子": "159732.SZ",
     "创新药":   "159992.SZ",
 }
+
+
+def _secid_to_yfinance(secid: str) -> str:
+    """将东方财富格式(1.600519)转为yfinance格式(600519.SS)"""
+    if "." in secid:
+        market, code = secid.split(".", 1)
+        suffix = "SS" if market == "1" else "SZ"
+        return f"{code}.{suffix}"
+    return secid
+
+
+def fetch_watchlist_weekly() -> dict:
+    """获取自选股本周累计涨跌"""
+    results = {}
+    for name, secid in WATCHLIST.items():
+        yf_code = _secid_to_yfinance(secid)
+        try:
+            ticker = yf.Ticker(yf_code)
+            hist = ticker.history(period="5d")
+            if len(hist) < 2:
+                continue
+            first_close = hist.iloc[0]["Close"]
+            last_close = hist.iloc[-1]["Close"]
+            week_change = last_close - first_close
+            week_change_pct = (week_change / first_close) * 100
+            results[name] = {
+                "name": name,
+                "start": round(float(first_close), 2),
+                "end": round(float(last_close), 2),
+                "change": round(float(week_change), 2),
+                "change_pct": round(float(week_change_pct), 2),
+                "high": round(float(hist["High"].max()), 2),
+                "low": round(float(hist["Low"].min()), 2),
+            }
+            print(f"  ✓ 自选股 {name}: 周{results[name]['change_pct']:+.2f}%")
+        except Exception as e:
+            print(f"  ✗ 自选股 {name}: {e}")
+    return results
 
 
 def fetch_sector_weekly_data() -> dict:
@@ -131,22 +200,26 @@ def fetch_weekly_data(symbols: dict) -> dict:
 
 
 def fetch_a_sectors_snapshot() -> dict:
-    """获取A股板块当前快照"""
+    """获取A股板块当前快照（东方财富API，带fltt=2和数据校验）"""
     results = {}
     import urllib.request
 
     for name, code in A_SECTORS_WEEKLY.items():
-        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fields=f43,f57,f58,f169,f170"
+        url = f"http://push2.eastmoney.com/api/qt/stock/get?secid={code}&fltt=2&fields=f43,f57,f58,f169,f170"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read().decode("utf-8"))
             d = data.get("data")
             if d and d.get("f57"):
+                pct = float(d.get("f170", 0))
+                if abs(pct) > 22:
+                    print(f"  ⚠ 板块{name}: 涨跌幅异常({pct}%)，跳过")
+                    continue
                 results[name] = {
                     "name": name,
                     "price": float(d.get("f43", 0)),
-                    "change_pct": float(d.get("f170", 0)),
+                    "change_pct": pct,
                     "change": float(d.get("f169", 0)),
                 }
         except Exception as e:
@@ -156,7 +229,8 @@ def fetch_a_sectors_snapshot() -> dict:
 
 
 def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
-                       a_sectors: dict, sector_weekly: dict, week_range: str) -> Optional[str]:
+                       a_sectors: dict, sector_weekly: dict, week_range: str,
+                       watchlist: dict = None) -> Optional[str]:
     """使用DeepSeek API生成下周展望分析"""
     if not DEEPSEEK_API_KEY:
         return None
@@ -166,14 +240,17 @@ def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
         # 构建数据摘要
-        data_summary = json.dumps({
+        data_parts = {
             "本周交易区间": week_range,
             "A股指数周涨跌": {k: f"{v['start']:.2f}→{v['end']:.2f}({v['change_pct']:+.2f}%)" for k, v in a_share.items()},
             "美股周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in us_data.items()},
             "日韩周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in asia_data.items()},
             "A股板块ETF周涨跌": {k: f"{v['change_pct']:+.2f}%" for k, v in sector_weekly.items()} if sector_weekly else {},
             "A股板块当日快照": {k: f"{v['change_pct']:+.2f}%" for k, v in a_sectors.items()},
-        }, ensure_ascii=False, indent=2)
+        }
+        if watchlist:
+            data_parts["自选股周表现"] = {k: f"{v['start']:.2f}→{v['end']:.2f}(周{v['change_pct']:+.2f}%)" for k, v in watchlist.items()}
+        data_summary = json.dumps(data_parts, ensure_ascii=False, indent=2)
 
         prompt = f"""你是资深股市分析师。以下是本周全球市场数据（JSON格式）：
 
@@ -185,12 +262,14 @@ def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
 3. 需要关注的潜在风险点或机会点（如政策面、外围市场、资金流向等）
 
 要求：语言通俗易懂，观点明确，适合非专业投资者阅读。"""
+        if watchlist:
+            prompt += "\n\n请额外对自选股持仓逐一给出下周展望（1-2句）。"
 
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=800,
+            max_tokens=1000,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -199,7 +278,8 @@ def ai_weekly_outlook(a_share: dict, us_data: dict, asia_data: dict,
 
 
 def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
-                              a_sectors: dict, week_range: str, sector_weekly: dict = None) -> str:
+                              a_sectors: dict, week_range: str, sector_weekly: dict = None,
+                              watchlist: dict = None) -> str:
     """生成周报分析文本"""
     lines = []
     lines.append(f"📅 本周交易区间：{week_range}")
@@ -270,7 +350,7 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
 
     # 下周展望（AI生成）
     lines.append("【🔮 下周展望】")
-    ai_outlook = ai_weekly_outlook(a_share, us_data, asia_data, a_sectors, sector_weekly, week_range)
+    ai_outlook = ai_weekly_outlook(a_share, us_data, asia_data, a_sectors, sector_weekly, week_range, watchlist)
     if ai_outlook:
         lines.append(ai_outlook)
     else:
@@ -296,7 +376,7 @@ def generate_weekly_analysis(a_share: dict, us_data: dict, asia_data: dict,
 
 def generate_html_weekly(date_str: str, week_range: str, a_share: dict, us_data: dict,
                           asia_data: dict, a_sectors: dict, analysis: str,
-                          sector_weekly: dict = None) -> str:
+                          sector_weekly: dict = None, watchlist: dict = None) -> str:
     """生成周报HTML邮件"""
     all_pct = []
     for d in list(a_share.values()) + list(us_data.values()):
@@ -436,12 +516,81 @@ body {{ font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif
 </div>"""
         html += "</div>"
 
+    # 自选股周度回顾
+    if watchlist:
+        html += '<div class="card"><div class="section-title">💼 自选股 · 本周回顾</div>'
+        sorted_w = sorted(watchlist.items(), key=lambda x: x[1]["change_pct"], reverse=True)
+        for name, d in sorted_w:
+            cls = "red" if d["change_pct"] > 0 else "green"
+            html += f"""<div class="idx">
+  <span class="idx-name">{name}</span>
+  <span class="idx-price">{d['start']:.2f} → <b>{d['end']:.2f}</b> <span class="{cls}">周{d['change_pct']:+.2f}%</span></span>
+</div>
+<div class="idx" style="border:none;font-size:12px;color:#999;">
+  <span>最高 {d['high']:.2f}</span><span>最低 {d['low']:.2f}</span>
+</div>"""
+        html += "</div>"
+
     # 分析
     if analysis:
         html += f'<div class="card"><div class="section-title">📋 本周总结 & 下周展望</div><div class="analysis">{analysis.replace(chr(10), "<br>")}</div></div>'
 
     html += '<div class="footer">🕖 每周日 19:00 自动推送 · Powered by GitHub Actions</div></body></html>'
     return html
+
+
+def send_webhook(a_share: dict, us_data: dict, asia_data: dict,
+                 watchlist: dict = None, ai_text: str = None):
+    """发送 Webhook 通知（企业微信/飞书）"""
+    lines = ["📊 本周市场摘要"]
+    if a_share:
+        parts = [f"{n} {d['end']:.0f}({d['change_pct']:+.2f}%)" for n, d in a_share.items()]
+        lines.append("A股：" + " | ".join(parts))
+    if us_data:
+        parts = [f"{n} {d['change_pct']:+.2f}%" for n, d in us_data.items()]
+        lines.append("美股：" + " | ".join(parts))
+    if asia_data:
+        parts = [f"{n} {d['change_pct']:+.2f}%" for n, d in asia_data.items()]
+        lines.append("日韩：" + " | ".join(parts))
+    if watchlist:
+        parts = [f"{n} {d['change_pct']:+.2f}%" for n, d in watchlist.items()]
+        lines.append("自选股：" + " | ".join(parts))
+    if ai_text:
+        lines.append("")
+        lines.append(ai_text[:300])
+    msg = "\n".join(lines)
+
+    # 企业微信
+    wecom_url = os.environ.get("WECOM_WEBHOOK_URL", "")
+    if wecom_url:
+        try:
+            payload = {"msgtype": "text", "text": {"content": msg}}
+            r = _requests.post(wecom_url, json=payload, timeout=10)
+            if r.status_code == 200 and r.json().get("errcode") == 0:
+                print("[企微通知] 发送成功 ✓")
+            else:
+                print(f"[企微通知] 发送失败: {r.text}")
+        except Exception as e:
+            print(f"[企微通知] 发送失败: {e}")
+
+    # 飞书
+    feishu_url = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if feishu_url:
+        try:
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {"title": {"tag": "plain_text", "content": "📊 全球股市周报"}},
+                    "elements": [{"tag": "markdown", "content": msg}]
+                }
+            }
+            r = _requests.post(feishu_url, json=payload, timeout=10)
+            if r.status_code == 200 and r.json().get("code", -1) == 0:
+                print("[飞书通知] 发送成功 ✓")
+            else:
+                print(f"[飞书通知] 发送失败: {r.text}")
+        except Exception as e:
+            print(f"[飞书通知] 发送失败: {e}")
 
 
 def send_email(html_content: str, subject: str):
@@ -501,17 +650,26 @@ def main():
     sector_weekly = fetch_sector_weekly_data()
     print(f"  → 获取到 {len(sector_weekly)} 个板块周数据")
 
+    # 4.8 自选股本周表现
+    print("[数据] 获取自选股本周数据...")
+    watchlist = fetch_watchlist_weekly()
+    print(f"  → 获取到 {len(watchlist)} 只自选股")
+
     # 5. 生成分析
     print("[分析] 生成周报...")
-    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range, sector_weekly)
+    analysis = generate_weekly_analysis(a_share, us_data, asia_data, a_sectors, week_range, sector_weekly, watchlist)
 
     # 6. HTML邮件
-    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis, sector_weekly)
+    html = generate_html_weekly(date_str, week_range, a_share, us_data, asia_data, a_sectors, analysis, sector_weekly, watchlist)
 
     # 7. 发送
     print("[邮件] 发送中...")
     subject = f"📊 全球股市周报 - {week_range}"
     send_email(html, subject)
+
+    # 8. Webhook 通知
+    print("[通知] 发送 Webhook 通知...")
+    send_webhook(a_share, us_data, asia_data, watchlist, analysis[:300] if analysis else None)
 
     print("[完成] 周报生成完毕 ✓")
 
