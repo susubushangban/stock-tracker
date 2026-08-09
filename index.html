@@ -462,44 +462,63 @@ async function addStock(name, code, market) {
     $('suggestions').classList.remove('show');
     $('searchInput').value = '';
 
-    try {
-        // 重新读取最新数据（避免冲突）
-        const allData = await ghGet();
-        const latestCust = allData.customers.find(c => c.id === activeCustId);
-        if (!latestCust) throw new Error('客户不存在');
-        if (!latestCust.watchlist) latestCust.watchlist = {};
-        if (latestCust.watchlist[name]) {
-            showToast(name + ' 已在自选中', 'error');
-            return;
-        }
-        latestCust.watchlist[name] = market + '.' + code;
-        customers = allData.customers; // 更新本地缓存
-        if (await saveCustomers()) {
+    // 重试机制：最多重试 3 次
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const allData = await ghGet();
+            const latestCust = allData.customers.find(c => c.id === activeCustId);
+            if (!latestCust) throw new Error('客户不存在');
+            if (!latestCust.watchlist) latestCust.watchlist = {};
+            if (latestCust.watchlist[name]) {
+                showToast(name + ' 已在自选中', 'error');
+                return;
+            }
+            latestCust.watchlist[name] = market + '.' + code;
+            customers = allData.customers;
+            await ghPut({ customers });
+            updateSync('ok');
             showToast('✓ 已添加 ' + name, 'success');
             renderCustomers();
             renderWatchlist();
+            return;
+        } catch (e) {
+            console.warn(`Add stock attempt ${attempt} failed:`, e.message);
+            if (attempt < 3) {
+                await new Promise(r => setTimeout(r, 1000));
+            } else {
+                showToast('添加失败: ' + e.message, 'error');
+                updateSync('off');
+            }
         }
-    } catch (e) {
-        showToast('添加失败: ' + e.message, 'error');
     }
 }
 
 async function removeStock(name) {
     if (!confirm('确定删除 ' + name + '？')) return;
-    try {
-        // 重新读取最新数据（避免冲突）
-        const allData = await ghGet();
-        const cust = allData.customers.find(c => c.id === activeCustId);
-        if (!cust) throw new Error('客户不存在');
-        delete cust.watchlist[name];
-        customers = allData.customers; // 更新本地缓存
-        if (await saveCustomers()) {
+
+    // 重试机制：最多重试 3 次
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const allData = await ghGet();
+            const cust = allData.customers.find(c => c.id === activeCustId);
+            if (!cust) throw new Error('客户不存在');
+            delete cust.watchlist[name];
+            customers = allData.customers;
+            await ghPut({ customers });
+            updateSync('ok');
             showToast('✓ 已删除 ' + name, 'success');
             renderCustomers();
             renderWatchlist();
+            return;
+        } catch (e) {
+            console.warn(`Remove stock attempt ${attempt} failed:`, e.message);
+            if (attempt < 3) {
+                await new Promise(r => setTimeout(r, 1000));
+            } else {
+                showToast('删除失败: ' + e.message, 'error');
+                updateSync('off');
+            }
         }
-    } catch (e) {
-        showToast('删除失败: ' + e.message, 'error');
     }
 }
 
